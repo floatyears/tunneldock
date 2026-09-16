@@ -6,9 +6,12 @@ use parking_lot::Mutex;
 use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
 
+use crate::utils::cmd::kill_process_tree;
+
 pub struct AppState {
     pub workspaces: Arc<Mutex<Vec<WorkspaceItem>>>,
     pub running_workspace_pids: Arc<Mutex<HashMap<String, u32>>>,
+    pub running_workspace_stdins: Arc<Mutex<HashMap<String, std::process::ChildStdin>>>,
     pub otunnel_pid: Arc<Mutex<Option<u32>>>,
     pub history: Arc<Mutex<Vec<McpCallRecord>>>,
     pub settings: Arc<Mutex<TunnelSettings>>,
@@ -29,11 +32,43 @@ impl AppState {
         Self {
             workspaces: Arc::new(Mutex::new(workspaces)),
             running_workspace_pids: Arc::new(Mutex::new(HashMap::new())),
+            running_workspace_stdins: Arc::new(Mutex::new(HashMap::new())),
             otunnel_pid: Arc::new(Mutex::new(None)),
             history: Arc::new(Mutex::new(history)),
             settings: Arc::new(Mutex::new(settings)),
             app_data_dir,
         }
+    }
+
+    pub fn cleanup_all_processes(&self) {
+        // 1. Terminate otunnel process tree and all otunnel instances
+        if let Some(pid) = *self.otunnel_pid.lock() {
+            kill_process_tree(pid);
+            *self.otunnel_pid.lock() = None;
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let _ = crate::utils::cmd::execute_raw("taskkill.exe", &["/F", "/IM", "otunnel.exe", "/T"], None);
+        }
+
+        // 2. Drop all running workspace stdins (signals EOF to children)
+        self.running_workspace_stdins.lock().clear();
+
+        // 3. Force kill all running workspace processes and their trees
+        let pids: Vec<u32> = self.running_workspace_pids.lock().values().copied().collect();
+        for pid in pids {
+            kill_process_tree(pid);
+        }
+        self.running_workspace_pids.lock().clear();
+
+        // 4. Mark workspaces as stopped
+        let mut list = self.workspaces.lock();
+        for w in list.iter_mut() {
+            w.status = "stopped".to_string();
+            w.pid = None;
+        }
+        drop(list);
+        self.save_workspaces();
     }
 
     fn load_settings(data_dir: &PathBuf) -> TunnelSettings {
@@ -124,5 +159,11 @@ impl AppState {
         if let Ok(json) = serde_json::to_string_pretty(&list) {
             let _ = fs::write(file, json);
         }
+    }
+}
+
+impl Drop for AppState {
+    fn drop(&mut self) {
+        self.cleanup_all_processes();
     }
 }

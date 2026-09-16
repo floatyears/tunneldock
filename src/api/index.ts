@@ -125,3 +125,7 @@ export async function updateSettings(
 export async function openPathInExplorer(path: string): Promise<boolean> {
   return await invoke<boolean>("open_path_in_explorer", { path });
 }
+
+export async function getAppVersion(): Promise<string> {
+  return await invoke<string>("get_app_version");
+}

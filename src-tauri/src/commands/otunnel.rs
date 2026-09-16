@@ -103,6 +103,9 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
     // Check if already running
     let cur_status = get_otunnel_status(state.clone()).await?;
     if cur_status.running && cur_status.healthz_ok {
+        if let Some(p) = cur_status.pid {
+            *state.otunnel_pid.lock() = Some(p);
+        }
         return Ok(cur_status.pid.unwrap_or(0));
     }
 
@@ -160,14 +163,26 @@ pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
     let mut killed = false;
 
     if let Some(pid) = pid_opt {
-        killed = kill_process_tree(pid);
+        if kill_process_tree(pid) {
+            killed = true;
+        }
         *state.otunnel_pid.lock() = None;
     }
 
-    // Also ensure any lingering otunnel.exe processes are terminated
-    let kill_all = execute_powershell("Stop-Process -Name otunnel -Force -ErrorAction SilentlyContinue", None);
-    if kill_all.success {
-        killed = true;
+    // Also ensure all otunnel.exe processes and their child trees are terminated
+    #[cfg(target_os = "windows")]
+    {
+        let out = crate::utils::cmd::execute_raw("taskkill.exe", &["/F", "/IM", "otunnel.exe", "/T"], None);
+        if out.success {
+            killed = true;
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let kill_all = execute_powershell("killall -9 otunnel 2>/dev/null", None);
+        if kill_all.success {
+            killed = true;
+        }
     }
 
     Ok(killed)

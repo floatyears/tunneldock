@@ -1,10 +1,15 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 use crate::models::WorkspaceItem;
 use crate::state::AppState;
 use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
+
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 #[tauri::command]
 pub async fn list_workspaces(state: State<'_, Arc<AppState>>) -> Result<Vec<WorkspaceItem>, String> {
@@ -104,11 +109,12 @@ pub async fn add_workspace(
 
 #[tauri::command]
 pub async fn remove_workspace(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<bool, String> {
     // Stop if running
-    let _ = stop_workspace_session(state.clone(), workspace_id.clone()).await;
+    let _ = stop_workspace_session(app, state.clone(), workspace_id.clone()).await;
 
     let mut workspaces = state.workspaces.lock();
     workspaces.retain(|w| w.id != workspace_id);
@@ -120,7 +126,7 @@ pub async fn remove_workspace(
 
 #[tauri::command]
 pub async fn start_workspace_session(
-    _app: AppHandle,
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
@@ -139,35 +145,178 @@ pub async fn start_workspace_session(
     }
 
     // Stop existing process if any
-    let _ = stop_workspace_session(state.clone(), workspace_id.clone()).await;
+    let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
 
-    // Pi is an interactive coding agent (TUI) that requires an active terminal (TTY)
-    // to render its UI, handle stdin/stdout, and register its session with the Chappie MCP Broker.
+    // Emit startup feedback into terminal drawer
+    let _ = app.emit(
+        "workspace-log",
+        serde_json::json!({
+            "workspace_id": &workspace_id,
+            "line": format!(">>> 正在启动工作区 Pi Session: {} ({})", ws_name, path_str),
+            "is_error": false,
+        }),
+    );
+    let _ = app.emit(
+        "workspace-log",
+        serde_json::json!({
+            "workspace_id": &workspace_id,
+            "line": ">>> 运行模式: RPC 后台服务 (连接 Chappie MCP Broker)...",
+            "is_error": false,
+        }),
+    );
+
     #[cfg(target_os = "windows")]
     let mut cmd = {
-        let mut c = Command::new("powershell.exe");
-        let script = format!(
-            "$Host.UI.RawUI.WindowTitle = 'Pi Session: {}'; Set-Location -LiteralPath '{}'; Write-Host '>>> 正在启动 Pi 工作区会话 [{}]...' -ForegroundColor Green; Write-Host '>>> 保持此终端窗口运行，ChatGPT 即可随时连接并操作本目录代码。' -ForegroundColor DarkGray; pi --provider chappie --model chatgpt",
-            ws_name.replace('\'', "''"),
-            path_str.replace('\'', "''"),
-            ws_name.replace('\'', "''")
-        );
-        c.args(["-NoExit", "-Command", &script]);
+        let mut c = Command::new("cmd.exe");
+        c.args(["/d", "/s", "/c", "pi", "--mode", "rpc", "--provider", "chappie", "--model", "chatgpt"]);
+        c.current_dir(&dir);
+        c.stdin(Stdio::piped());
+        c.stdout(Stdio::piped());
+        c.stderr(Stdio::piped());
+        c.creation_flags(CREATE_NO_WINDOW);
         c
     };
     #[cfg(not(target_os = "windows"))]
     let mut cmd = {
         let mut c = Command::new("pi");
-        c.args(["--provider", "chappie", "--model", "chatgpt"]);
+        c.args(["--mode", "rpc", "--provider", "chappie", "--model", "chatgpt"]);
         c.current_dir(&dir);
+        c.stdin(Stdio::piped());
+        c.stdout(Stdio::piped());
+        c.stderr(Stdio::piped());
         c
     };
 
-    let child = cmd.spawn().map_err(|e| format!("无法启动 Pi Session 终端: {}", e))?;
+    let mut child = cmd.spawn().map_err(|e| format!("无法启动 Pi Session: {}", e))?;
     let pid = child.id();
 
     // Track PID
     state.running_workspace_pids.lock().insert(workspace_id.clone(), pid);
+
+    // Write initial command to Pi RPC stdin to query session state & obtain sessionId
+    let mut stdin = child.stdin.take();
+    if let Some(ref mut sin) = stdin {
+        use std::io::Write;
+        let _ = sin.write_all(b"{\"id\":\"init\",\"type\":\"get_state\"}\n");
+        let _ = sin.flush();
+    }
+    if let Some(sin) = stdin {
+        state.running_workspace_stdins.lock().insert(workspace_id.clone(), sin);
+    }
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    // Stream stdout to terminal drawer & parse session_id
+    if let Some(out) = stdout {
+        let app_handle = app.clone();
+        let ws_id = workspace_id.clone();
+        let state_clone = state.inner().clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(out);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    // Look for JSON RPC response containing sessionId
+                    if trimmed.contains("\"sessionId\"") {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                            let sid = val["data"]["sessionId"]
+                                .as_str()
+                                .or_else(|| val["sessionId"].as_str());
+                            if let Some(session_id) = sid {
+                                let mut list = state_clone.workspaces.lock();
+                                if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
+                                    w.session_id = Some(session_id.to_string());
+                                }
+                                drop(list);
+                                state_clone.save_workspaces();
+
+                                let _ = app_handle.emit(
+                                    "workspace-log",
+                                    serde_json::json!({
+                                        "workspace_id": &ws_id,
+                                        "line": format!(">>> Pi 会话已激活并注册至 Broker | Session ID: {}", session_id),
+                                        "is_error": false,
+                                    }),
+                                );
+                            }
+                        }
+                    }
+
+                    let _ = app_handle.emit(
+                        "workspace-log",
+                        serde_json::json!({
+                            "workspace_id": &ws_id,
+                            "line": trimmed,
+                            "is_error": false,
+                        }),
+                    );
+                }
+            }
+        });
+    }
+
+    // Stream stderr to terminal drawer
+    if let Some(err) = stderr {
+        let app_handle = app.clone();
+        let ws_id = workspace_id.clone();
+        std::thread::spawn(move || {
+            use std::io::{BufRead, BufReader};
+            let reader = BufReader::new(err);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let lower = trimmed.to_lowercase();
+                    let is_err = lower.contains("error:") || lower.contains("fatal:") || lower.contains("exception");
+                    let _ = app_handle.emit(
+                        "workspace-log",
+                        serde_json::json!({
+                            "workspace_id": &ws_id,
+                            "line": trimmed,
+                            "is_error": is_err,
+                        }),
+                    );
+                }
+            }
+        });
+    }
+
+    // Monitor child process exit
+    {
+        let app_handle = app.clone();
+        let ws_id = workspace_id.clone();
+        let state_clone = state.inner().clone();
+        std::thread::spawn(move || {
+            let _ = child.wait();
+            state_clone.running_workspace_pids.lock().remove(&ws_id);
+            state_clone.running_workspace_stdins.lock().remove(&ws_id);
+
+            let mut list = state_clone.workspaces.lock();
+            if let Some(w) = list.iter_mut().find(|w| w.id == ws_id) {
+                w.status = "stopped".to_string();
+                w.pid = None;
+            }
+            drop(list);
+            state_clone.save_workspaces();
+
+            let _ = app_handle.emit(
+                "workspace-log",
+                serde_json::json!({
+                    "workspace_id": &ws_id,
+                    "line": ">>> Pi 工作区会话已结束退出",
+                    "is_error": false,
+                }),
+            );
+        });
+    }
 
     {
         let mut list = state.workspaces.lock();
@@ -184,9 +333,14 @@ pub async fn start_workspace_session(
 
 #[tauri::command]
 pub async fn stop_workspace_session(
+    app: AppHandle,
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<bool, String> {
+    // 1. Close stdin to signal EOF to Pi process
+    state.running_workspace_stdins.lock().remove(&workspace_id);
+
+    // 2. Terminate PID process tree
     let pid_opt = state.running_workspace_pids.lock().remove(&workspace_id);
     let mut stopped = false;
 
@@ -203,6 +357,16 @@ pub async fn stop_workspace_session(
     }
 
     state.save_workspaces();
+
+    let _ = app.emit(
+        "workspace-log",
+        serde_json::json!({
+            "workspace_id": &workspace_id,
+            "line": ">>> Pi 工作区会话已成功停止",
+            "is_error": false,
+        }),
+    );
+
     Ok(stopped)
 }
 
@@ -212,7 +376,7 @@ pub async fn restart_workspace_session(
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
-    let _ = stop_workspace_session(state.clone(), workspace_id.clone()).await;
+    let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     start_workspace_session(app, state, workspace_id).await
 }

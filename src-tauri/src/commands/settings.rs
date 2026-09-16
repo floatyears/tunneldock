@@ -29,3 +29,8 @@ pub fn open_path_in_explorer(path: String) -> bool {
         execute_cmd("explorer.exe", &[&path], None).success
     }
 }
+
+#[tauri::command]
+pub fn get_app_version(app: tauri::AppHandle) -> String {
+    app.package_info().version.to_string()
+}

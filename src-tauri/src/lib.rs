@@ -9,6 +9,8 @@ use tauri::Manager;
 
 pub fn run() {
     let app_state = Arc::new(AppState::new());
+    let state_window = app_state.clone();
+    let state_exit = app_state.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
@@ -21,6 +23,11 @@ pub fn run() {
                 }
             }
             Ok(())
+        })
+        .on_window_event(move |_window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                state_window.cleanup_all_processes();
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // Environment
@@ -50,7 +57,14 @@ pub fn run() {
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::settings::open_path_in_explorer,
+            commands::settings::get_app_version,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(move |_app, event| match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                state_exit.cleanup_all_processes();
+            }
+            _ => {}
+        });
 }

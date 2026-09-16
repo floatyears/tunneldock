@@ -2,6 +2,8 @@ import React from "react";
 import { RefreshCw, Power, Radio } from "lucide-react";
 import { OtunnelDaemonStatus } from "../types";
 
+import { APP_VERSION } from "../version";
+
 interface HeaderProps {
   otunnelStatus: OtunnelDaemonStatus | null;
   activeSessionsCount: number;
@@ -33,8 +35,8 @@ export const Header: React.FC<HeaderProps> = ({
             <h1 className="text-sm font-semibold tracking-wide text-zinc-100">
               CHAPPIE STUDIO
             </h1>
-            <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800/80 text-zinc-400 border border-zinc-700/50">
-              v1.0 Pro
+            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-medium">
+              v{APP_VERSION}
             </span>
           </div>
           <p className="text-[11px] text-zinc-500 font-mono">

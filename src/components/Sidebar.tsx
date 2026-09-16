@@ -8,6 +8,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { TunnelSettings } from "../types";
+import { APP_VERSION } from "../version";
 
 export type NavTab = "env" | "workspaces" | "health" | "history" | "settings";
 
@@ -148,6 +149,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
             :8080
           </span>
         </div>
+      </div>
+
+      {/* App Version Footer */}
+      <div className="px-4 py-2.5 border-t border-zinc-800/80 flex items-center justify-between text-[11px] font-mono text-zinc-500">
+        <span>客户端版本</span>
+        <span className="px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-800 text-zinc-400">
+          v{APP_VERSION}
+        </span>
       </div>
     </aside>
   );

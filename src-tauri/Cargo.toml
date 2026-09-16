@@ -1,6 +1,6 @@
 [package]
 name = "chappie-desktop"
-version = "1.0.0"
+version = "0.1.0"
 description = "OpenAI Tunnel, Chappie and Pi local workspace manager"
 authors = ["Tian Feng"]
 edition = "2021"
