@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- Background Squircle Gradient: Deep Metallic Obsidian -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1e24" />
+      <stop offset="50%" stop-color="#121216" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+
+    <!-- Emerald Accent Gradient -->
+    <linearGradient id="emeraldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" />
+      <stop offset="50%" stop-color="#10b981" />
+      <stop offset="100%" stop-color="#059669" />
+    </linearGradient>
+
+    <!-- Border Gradient with Emerald Edge Highlight -->
+    <linearGradient id="borderGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.9" />
+      <stop offset="40%" stop-color="#10b981" stop-opacity="0.5" />
+      <stop offset="100%" stop-color="#27272a" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- Soft Ambient Glow -->
+    <filter id="softGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="10" flood-color="#10b981" flood-opacity="0.28" />
+    </filter>
+  </defs>
+
+  <!-- Full-Bleed Modern Squircle Base (Fills 94% of canvas, eliminating excessive transparent margins) -->
+  <rect x="16" y="16" width="480" height="480" rx="108" ry="108" 
+        fill="url(#bgGrad)" 
+        stroke="url(#borderGrad)" 
+        stroke-width="12" />
+
+  <!-- Bold Emerald Hexagon Portal (Centered & Large) -->
+  <polygon points="256,66 426,164 426,348 256,446 86,348 86,164" 
+           fill="url(#emeraldGrad)" 
+           filter="url(#softGlow)" />
+
+  <!-- Inner Dark Obsidian Core Cutout -->
+  <polygon points="256,128 374,196 374,316 256,384 138,316 138,196" 
+           fill="#09090b" />
+
+  <!-- Bold Terminal Chevron > (Crisp White for Maximum Contrast) -->
+  <polyline points="204,212 254,256 204,300" 
+            fill="none" 
+            stroke="#ffffff" 
+            stroke-width="36" 
+            stroke-linecap="round" 
+            stroke-linejoin="round" />
+
+  <!-- Bold Mint Terminal Cursor _ -->
+  <line x1="272" y1="300" x2="318" y2="300" 
+        stroke="#34d399" 
+        stroke-width="36" 
+        stroke-linecap="round" />
+</svg>

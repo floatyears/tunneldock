@@ -1,0 +1,294 @@
+import React, { useState, useEffect, useCallback } from "react";
+import { listen } from "@tauri-apps/api/event";
+import { Header } from "./components/Header";
+import { Sidebar, NavTab } from "./components/Sidebar";
+import { TerminalDrawer } from "./components/TerminalDrawer";
+import { EnvironmentView } from "./views/EnvironmentView";
+import { WorkspaceView } from "./views/WorkspaceView";
+import { HealthView } from "./views/HealthView";
+import { HistoryView } from "./views/HistoryView";
+import { SettingsView } from "./views/SettingsView";
+import {
+  EnvCheckItem,
+  WorkspaceItem,
+  OtunnelDaemonStatus,
+  McpCallRecord,
+  TunnelSettings,
+  InstallProgressEvent,
+} from "./types";
+import {
+  checkEnvironment,
+  listWorkspaces,
+  getOtunnelStatus,
+  listHistory,
+  getSettings,
+  startOtunnel,
+  stopOtunnel,
+} from "./api";
+
+export const App: React.FC = () => {
+  const [currentTab, setCurrentTab] = useState<NavTab>("env");
+
+  // Core States
+  const [envItems, setEnvItems] = useState<EnvCheckItem[]>([]);
+  const [envLoading, setEnvLoading] = useState(false);
+
+  const [workspaces, setWorkspaces] = useState<WorkspaceItem[]>([]);
+  const [workspacesLoading, setWorkspacesLoading] = useState(false);
+
+  const [otunnelStatus, setOtunnelStatus] = useState<OtunnelDaemonStatus | null>(
+    null
+  );
+  const [isTogglingOtunnel, setIsTogglingOtunnel] = useState(false);
+
+  const [history, setHistory] = useState<McpCallRecord[]>([]);
+  const [settings, setSettings] = useState<TunnelSettings | null>(null);
+
+  // Terminal Drawer State
+  const [terminalOpen, setTerminalOpen] = useState(false);
+  const [terminalTitle, setTerminalTitle] = useState("安装与系统控制台");
+  const [terminalLogs, setTerminalLogs] = useState<
+    Array<{ line: string; is_error: boolean }>
+  >([]);
+
+  // Refresh functions
+  const loadEnv = useCallback(async () => {
+    try {
+      setEnvLoading(true);
+      const items = await checkEnvironment();
+      setEnvItems(items);
+    } catch (e) {
+      console.error("Failed to load environment:", e);
+    } finally {
+      setEnvLoading(false);
+    }
+  }, []);
+
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      setWorkspacesLoading(true);
+      const list = await listWorkspaces();
+      setWorkspaces(list);
+    } catch (e) {
+      console.error("Failed to load workspaces:", e);
+    } finally {
+      setWorkspacesLoading(false);
+    }
+  }, []);
+
+  const loadOtunnelStatus = useCallback(async () => {
+    try {
+      const status = await getOtunnelStatus();
+      setOtunnelStatus(status);
+    } catch (e) {
+      console.error("Failed to load otunnel status:", e);
+    }
+  }, []);
+
+  const loadHistoryData = useCallback(async () => {
+    try {
+      const h = await listHistory();
+      setHistory(h);
+    } catch (e) {
+      console.error("Failed to load history:", e);
+    }
+  }, []);
+
+  const loadSettingsData = useCallback(async () => {
+    try {
+      const s = await getSettings();
+      setSettings(s);
+    } catch (e) {
+      console.error("Failed to load settings:", e);
+    }
+  }, []);
+
+  const refreshAll = useCallback(async () => {
+    await Promise.allSettled([
+      loadEnv(),
+      loadWorkspaces(),
+      loadOtunnelStatus(),
+      loadHistoryData(),
+      loadSettingsData(),
+    ]);
+  }, [
+    loadEnv,
+    loadWorkspaces,
+    loadOtunnelStatus,
+    loadHistoryData,
+    loadSettingsData,
+  ]);
+
+  // Initial Load
+  useEffect(() => {
+    refreshAll();
+  }, [refreshAll]);
+
+  // Periodic health polling
+  useEffect(() => {
+    const timer = setInterval(() => {
+      loadOtunnelStatus();
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [loadOtunnelStatus]);
+
+  // Event Listeners for logs
+  useEffect(() => {
+    let unlistenInstall: (() => void) | undefined;
+    let unlistenWs: (() => void) | undefined;
+
+    const setupListeners = async () => {
+      try {
+        unlistenInstall = await listen<InstallProgressEvent>(
+          "install-log",
+          (event) => {
+            setTerminalLogs((prev) => [
+              ...prev,
+              { line: event.payload.log_line, is_error: event.payload.is_error },
+            ]);
+          }
+        );
+
+        unlistenWs = await listen<{
+          workspace_id: string;
+          line: string;
+          is_error: boolean;
+        }>("workspace-log", (event) => {
+          setTerminalLogs((prev) => [
+            ...prev,
+            { line: event.payload.line, is_error: event.payload.is_error },
+          ]);
+        });
+      } catch (e) {
+        console.warn("Tauri event listener registration skipped or failed:", e);
+      }
+    };
+
+    setupListeners();
+
+    return () => {
+      if (unlistenInstall) unlistenInstall();
+      if (unlistenWs) unlistenWs();
+    };
+  }, []);
+
+  // Header Toggle Otunnel
+  const handleToggleOtunnel = async () => {
+    const isOnline = otunnelStatus?.running && otunnelStatus?.healthz_ok;
+    try {
+      setIsTogglingOtunnel(true);
+      if (isOnline) {
+        await stopOtunnel();
+      } else {
+        await startOtunnel();
+      }
+      await loadOtunnelStatus();
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setIsTogglingOtunnel(false);
+    }
+  };
+
+  const handleOpenTerminalForWs = (_workspaceId: string, title: string) => {
+    setTerminalTitle(title);
+    setTerminalOpen(true);
+  };
+
+  // Badge calculations
+  const missingEnvCount = envItems.filter(
+    (i) => i.status === "missing" || i.status === "outdated"
+  ).length;
+
+  const activeWorkspacesCount = workspaces.filter(
+    (w) => w.status === "ready" || w.status === "executing"
+  ).length;
+
+  const isTunnelOnline =
+    otunnelStatus?.running && otunnelStatus?.healthz_ok;
+
+  return (
+    <div className="h-screen w-screen flex flex-col bg-dark-bg text-zinc-100 overflow-hidden font-sans">
+      {/* Top Header */}
+      <Header
+        otunnelStatus={otunnelStatus}
+        activeSessionsCount={activeWorkspacesCount}
+        onToggleOtunnel={handleToggleOtunnel}
+        isTogglingOtunnel={isTogglingOtunnel}
+        onRefresh={refreshAll}
+      />
+
+      {/* Main Workspace Frame */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Sidebar */}
+        <Sidebar
+          currentTab={currentTab}
+          onSelectTab={setCurrentTab}
+          missingEnvCount={missingEnvCount}
+          activeWorkspacesCount={activeWorkspacesCount}
+          doctorPassed={!!isTunnelOnline}
+          historyCount={history.length}
+          settings={settings}
+        />
+
+        {/* View Content Area */}
+        <main className="flex-1 overflow-y-auto bg-dark-bg">
+          {currentTab === "env" && (
+            <EnvironmentView
+              items={envItems}
+              loading={envLoading}
+              onRefresh={loadEnv}
+              onOpenTerminal={() => {
+                setTerminalTitle("环境安装与诊断输出");
+                setTerminalOpen(true);
+              }}
+              settings={settings}
+              onSaveSettings={loadSettingsData}
+            />
+          )}
+
+          {currentTab === "workspaces" && (
+            <WorkspaceView
+              workspaces={workspaces}
+              loading={workspacesLoading}
+              onRefresh={loadWorkspaces}
+              onOpenTerminalForWorkspace={handleOpenTerminalForWs}
+            />
+          )}
+
+          {currentTab === "health" && (
+            <HealthView
+              otunnelStatus={otunnelStatus}
+              onRefreshStatus={loadOtunnelStatus}
+            />
+          )}
+
+          {currentTab === "history" && (
+            <HistoryView
+              history={history}
+              onRefresh={loadHistoryData}
+            />
+          )}
+
+          {currentTab === "settings" && (
+            <SettingsView
+              settings={settings}
+              onRefreshSettings={loadSettingsData}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* Persistent Monospace Terminal Drawer */}
+      <TerminalDrawer
+        title={terminalTitle}
+        isOpen={terminalOpen}
+        onClose={() => setTerminalOpen(false)}
+        logs={terminalLogs}
+        onClear={() => setTerminalLogs([])}
+      />
+    </div>
+  );
+};
+
+export default App;

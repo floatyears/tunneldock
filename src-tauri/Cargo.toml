@@ -1,0 +1,27 @@
+[package]
+name = "chappie-desktop"
+version = "1.0.0"
+description = "OpenAI Tunnel, Chappie and Pi local workspace manager"
+authors = ["Tian Feng"]
+edition = "2021"
+
+[lib]
+name = "chappie_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+regex = "1"
+dirs = "5.0"
+sysinfo = "0.33"
+parking_lot = "0.12"
