@@ -249,11 +249,15 @@ fn install_node_windows(logger: &InstallLogger, repair_npm: bool) -> bool {
             ],
         );
         refresh_runtime_environment();
-        if upgraded || verify_node().is_ok() {
+        if verify_node().is_ok() {
+            return true;
+        }
+        if upgraded {
+            logger.info("winget 已完成升级，但当前 PATH 仍未解析到满足 >= 26 的 Node.js；停止重复覆盖安装，交由最终验证报告活动路径冲突。".to_string());
             return true;
         }
 
-        logger.info("winget upgrade 未能得到满足要求的活动 Node.js，回退到强制安装最新版。".to_string());
+        logger.info("winget upgrade 不可用或当前 Node 不受 winget 管理，回退到强制安装最新版。".to_string());
     }
 
     run_logged(
@@ -284,7 +288,11 @@ fn install_node_macos(logger: &InstallLogger, repair_npm: bool) -> Result<bool, 
     if find_executable("node").is_some() {
         let upgraded = run_logged(logger, "brew", &["upgrade", "node"]);
         refresh_runtime_environment();
-        if upgraded || verify_node().is_ok() {
+        if verify_node().is_ok() {
+            return Ok(true);
+        }
+        if upgraded {
+            logger.info("Homebrew 已完成升级，但活动 Node.js 仍未满足要求；停止重复安装，最终验证将报告当前活动路径。".to_string());
             return Ok(true);
         }
     }
@@ -472,21 +480,32 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
             } else {
                 format!("安装命令失败，且后置验证未通过：{}", verify_error)
             };
-            logger.error(message.clone());
             Err(message)
         }
     }
 }
 
 #[tauri::command]
-pub async fn install_component(app: AppHandle, item_id: String) -> Result<bool, String> {
+pub async fn install_component_v2(app: AppHandle, item_id: String) -> Result<bool, String> {
     // Package managers mutate shared PATH/toolchain state. Serialize installs so
     // double-clicks or multiple cards cannot run winget/cargo/npm concurrently.
     let _guard = install_lock().lock().await;
 
     // Package installs and Cargo compilation are blocking operations. Keep them off
     // Tauri/Tokio's async worker threads so health polling and window IPC stay alive.
-    tokio::task::spawn_blocking(move || install_component_blocking(app, item_id))
+    let failure_app = app.clone();
+    let failure_item_id = item_id.clone();
+    let result = tokio::task::spawn_blocking(move || install_component_blocking(app, item_id))
         .await
-        .map_err(|join_error| format!("安装任务异常终止: {}", join_error))?
+        .map_err(|join_error| format!("安装任务异常终止: {}", join_error))?;
+
+    if let Err(ref error) = result {
+        InstallLogger {
+            app: failure_app,
+            item_id: failure_item_id,
+        }
+        .error(error.clone());
+    }
+
+    result
 }
