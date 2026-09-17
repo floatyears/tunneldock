@@ -89,7 +89,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `chappie-mcp-history-${Date.now()}.json`;
+      a.download = `tunneldock-mcp-history-${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
     } catch (e) {

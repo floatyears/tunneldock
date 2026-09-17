@@ -10,8 +10,8 @@ use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
 use crate::utils::cmd::kill_process_tree;
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
 
-const APP_DATA_DIR_NAME: &str = "local-mcp-console";
-const LEGACY_APP_DATA_DIR_NAME: &str = "chappie-desktop";
+const APP_DATA_DIR_NAME: &str = "TunnelDock";
+const LEGACY_APP_DATA_DIR_NAMES: [&str; 2] = ["local-mcp-console", "chappie-desktop"];
 const PERSISTED_FILES: [&str; 3] = ["settings.json", "workspaces.json", "history.json"];
 
 pub struct AppState {
@@ -47,13 +47,22 @@ impl AppState {
 
     fn resolve_app_data_dir() -> PathBuf {
         let base_dir = dirs::data_dir().unwrap_or_else(|| PathBuf::from("."));
-        let app_data_dir = base_dir.join(APP_DATA_DIR_NAME);
-        let legacy_app_data_dir = base_dir.join(LEGACY_APP_DATA_DIR_NAME);
+        Self::resolve_app_data_dir_in(&base_dir)
+    }
 
-        if !app_data_dir.exists() && legacy_app_data_dir.exists() {
-            if fs::rename(&legacy_app_data_dir, &app_data_dir).is_err() {
-                let _ = fs::create_dir_all(&app_data_dir);
-                Self::copy_legacy_data(&legacy_app_data_dir, &app_data_dir);
+    fn resolve_app_data_dir_in(base_dir: &Path) -> PathBuf {
+        let app_data_dir = base_dir.join(APP_DATA_DIR_NAME);
+
+        if !app_data_dir.exists() {
+            for legacy_name in LEGACY_APP_DATA_DIR_NAMES {
+                let legacy_app_data_dir = base_dir.join(legacy_name);
+                if legacy_app_data_dir.exists() {
+                    if fs::rename(&legacy_app_data_dir, &app_data_dir).is_err() {
+                        let _ = fs::create_dir_all(&app_data_dir);
+                        Self::copy_legacy_data(&legacy_app_data_dir, &app_data_dir);
+                    }
+                    break;
+                }
             }
         }
 
@@ -114,7 +123,7 @@ impl AppState {
 
         // Try reading existing from ~/.chappie/tunnelkey.txt or chappie.yaml if present.
         // These names belong to the Chappie/otunnel integration and are intentionally
-        // retained independently from the Local MCP Console product brand.
+        // retained independently from the TunnelDock product brand.
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         let key_file = home.join(".chappie").join("tunnelkey.txt");
         let key = if key_file.exists() {
@@ -207,5 +216,47 @@ impl AppState {
 impl Drop for AppState {
     fn drop(&mut self) {
         self.cleanup_all_processes();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppState;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_data_root(case: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock must be after Unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "tunneldock-state-test-{}-{}-{}",
+            std::process::id(),
+            nonce,
+            case
+        ))
+    }
+
+    #[test]
+    fn migrates_data_from_all_pre_tunneldock_directories() {
+        for legacy_name in ["local-mcp-console", "chappie-desktop"] {
+            let base_dir = temporary_data_root(legacy_name);
+            let legacy_dir = base_dir.join(legacy_name);
+            fs::create_dir_all(&legacy_dir).expect("legacy directory should be created");
+            fs::write(legacy_dir.join("settings.json"), legacy_name)
+                .expect("legacy settings should be written");
+
+            let resolved = AppState::resolve_app_data_dir_in(&base_dir);
+
+            assert_eq!(resolved, base_dir.join("TunnelDock"));
+            assert_eq!(
+                fs::read_to_string(resolved.join("settings.json"))
+                    .expect("migrated settings should exist"),
+                legacy_name
+            );
+            fs::remove_dir_all(base_dir).expect("test data should be removed");
+        }
     }
 }

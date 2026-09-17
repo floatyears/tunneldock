@@ -1,17 +1,17 @@
-# Local MCP Console
+# TunnelDock
 
 <p align="center">
-  <img src="./app-icon.svg" alt="Local MCP Console" width="96" />
+  <img src="./app-icon.svg" alt="TunnelDock" width="96" />
 </p>
 
 <p>
-  <a href="https://github.com/t59688/hola/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/t59688/hola?include_prereleases&display_name=tag" /></a>
+  <a href="https://github.com/t59688/tunneldock/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/t59688/tunneldock?include_prereleases&display_name=tag" /></a>
   <a href="./LICENSE"><img alt="License: GPLv3" src="https://img.shields.io/badge/License-GPLv3-blue.svg" /></a>
   <img alt="Platform: Windows | macOS | Linux" src="https://img.shields.io/badge/Platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey" />
-  <a href="https://github.com/t59688/hola/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/t59688/hola/release.yml" /></a>
+  <a href="https://github.com/t59688/tunneldock/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/t59688/tunneldock/release.yml" /></a>
 </p>
 
-**Local MCP Console** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
+**TunnelDock** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
 
 > 核心理念：**ChatGPT 负责思考与上下文，Pi 负责本地执行**。
 >
@@ -57,7 +57,7 @@ ChatGPT 网页版
 OpenAI Secure MCP Tunnel
       │
       ▼
-    otunnel              ← Local MCP Console 管理其生命周期、健康与诊断
+    otunnel              ← TunnelDock 管理其生命周期、健康与诊断
       │
       │ stdio
       ▼
@@ -77,7 +77,7 @@ OpenAI Secure MCP Tunnel
 
 ### 下载发布包
 
-前往 [Releases](https://github.com/t59688/hola/releases) 下载最新版本：
+前往 [Releases](https://github.com/t59688/tunneldock/releases) 下载最新版本：
 
 | 平台 | 产物 |
 | --- | --- |
@@ -94,7 +94,7 @@ OpenAI Secure MCP Tunnel
 - 平台构建依赖，见 [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)（例如 Linux 需 `libwebkit2gtk-4.1-dev` 等）
 
 ```bash
-git clone https://github.com/t59688/hola.git
+git clone https://github.com/t59688/tunneldock.git
 cd hola
 npm ci
 npm run tauri build
@@ -118,9 +118,9 @@ npm run tauri build
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
 | `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认端口 `8080`）、MCP 目标（`pi --chappie`） |
-| 系统数据目录下的 `local-mcp-console/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
+| 系统数据目录下的 `TunnelDock/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
 
-从旧版 `chappie-desktop/` 升级时，Local MCP Console 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
+从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
 
 > 切勿将 `tunnelkey.txt` 或任何 API Key 提交到代码仓库。
 
@@ -168,7 +168,7 @@ hola/
 
 欢迎任何形式的贡献！
 
-1. 先 [提交 Issue](https://github.com/t59688/hola/issues) 讨论 bug 或新功能；
+1. 先 [提交 Issue](https://github.com/t59688/tunneldock/issues) 讨论 bug 或新功能；
 2. Fork 本仓库，创建特性分支，发起 Pull Request；
 3. 请遵循现有代码风格：Rust 端使用 `rustfmt`，前端使用 TypeScript 严格模式；
 4. PR 描述中请说明改动目的，UI 变更请附截图。
@@ -190,7 +190,7 @@ hola/
 ## 免责声明
 
 - 本项目为社区开源工具，**与 OpenAI 官方无关**，非 OpenAI 官方产品；
-- Chappie、otunnel、Pi 及其相关名称属于各自上游项目；Local MCP Console 仅集成这些组件，不宣称与其品牌存在从属或官方关系；
+- Chappie、otunnel、Pi 及其相关名称属于各自上游项目；TunnelDock 仅集成这些组件，不宣称与其品牌存在从属或官方关系；
 - 本工具会将 ChatGPT 网页版的工具调用转发到本地执行，请充分理解其中的安全风险并自行负责使用后果；
 - 作者不对使用本软件导致的任何数据丢失或损失承担责任。
 

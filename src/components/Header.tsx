@@ -32,13 +32,13 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-3">
         <img
           src="/app-icon.svg"
-          alt="Local MCP Console"
+          alt="TunnelDock"
           className="w-8 h-8 rounded-lg shadow-md border border-zinc-800/80"
         />
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-sm font-semibold tracking-wide text-zinc-100">
-              LOCAL MCP CONSOLE
+              TunnelDock
             </h1>
             <button
               type="button"

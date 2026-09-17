@@ -98,7 +98,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
             </div>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h2 className="text-base font-semibold text-zinc-100">Chappie Studio 软件更新</h2>
+                <h2 className="text-base font-semibold text-zinc-100">TunnelDock 软件更新</h2>
                 {hasUpdate && (
                   <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-emerald-800/70 bg-emerald-950/50 text-emerald-300">
                     v{state.latestVersion}
@@ -106,7 +106,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                 )}
               </div>
               <p className="mt-1 text-xs text-zinc-500">
-                更新源：GitHub Releases · t59688/hola · 安装包由 Tauri 签名校验
+                更新源：GitHub Releases · t59688/tunneldock · 安装包由 Tauri 签名校验
               </p>
             </div>
           </div>
@@ -228,7 +228,7 @@ export const UpdateDialog: React.FC<UpdateDialogProps> = ({
                   <div>
                     <div className="text-sm font-semibold text-zinc-100">更新已经安装完成</div>
                     <div className="text-xs text-zinc-500 mt-1">
-                      新版本将在下次启动 Chappie Studio 时生效。
+                      新版本将在下次启动 TunnelDock 时生效。
                     </div>
                   </div>
                 </div>
