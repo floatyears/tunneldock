@@ -14,7 +14,11 @@ export async function checkEnvironment(): Promise<EnvCheckItem[]> {
 }
 
 export async function installComponent(itemId: string): Promise<boolean> {
-  return await invoke<boolean>("install_component", { itemId });
+  const ok = await invoke<boolean>("install_component", { itemId });
+  if (!ok) {
+    throw new Error(`组件 ${itemId} 安装后未通过可用性验证`);
+  }
+  return true;
 }
 
 export async function saveTunnelCredentials(
