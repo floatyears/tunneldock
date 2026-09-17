@@ -1,6 +1,11 @@
-use std::process::{Command, Stdio};
+use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::io::{BufRead, BufReader};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+
 use crate::models::CommandOutput;
 
 #[cfg(target_os = "windows")]
@@ -80,9 +85,73 @@ pub fn execute_cmd(command: &str, args: &[&str], cwd: Option<&Path>) -> CommandO
 pub fn execute_powershell(script: &str, cwd: Option<&Path>) -> CommandOutput {
     execute_raw(
         "powershell.exe",
-        &["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+        &[
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ],
         cwd,
     )
+}
+
+/// Refresh this GUI process' PATH from the Windows registry without restarting
+/// the application. Package installers such as winget update the registry, but
+/// an already-running Tauri process keeps the environment block it inherited at
+/// startup. Preserve any process-local PATH entries after the refreshed entries
+/// so development launches do not lose their temporary tool paths.
+#[cfg(target_os = "windows")]
+pub fn refresh_process_path() -> bool {
+    let out = execute_powershell(
+        "$machine=[Environment]::GetEnvironmentVariable('Path','Machine'); \
+         $user=[Environment]::GetEnvironmentVariable('Path','User'); \
+         [Console]::OutputEncoding=[Text.UTF8Encoding]::new(); \
+         Write-Output (($machine,$user) -join ';')",
+        None,
+    );
+
+    if !out.success {
+        return false;
+    }
+
+    let fresh = out.stdout.trim();
+    if fresh.is_empty() {
+        return false;
+    }
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut merged: Vec<PathBuf> = Vec::new();
+
+    for entry in std::env::split_paths(OsStr::new(fresh))
+        .chain(std::env::split_paths(&current))
+    {
+        if entry.as_os_str().is_empty() {
+            continue;
+        }
+        let key = entry
+            .to_string_lossy()
+            .trim_end_matches(['\\', '/'])
+            .to_ascii_lowercase();
+        if seen.insert(key) {
+            merged.push(entry);
+        }
+    }
+
+    match std::env::join_paths(merged) {
+        Ok(path) => {
+            std::env::set_var("PATH", path);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn refresh_process_path() -> bool {
+    true
 }
 
 pub fn find_executable(name: &str) -> Option<String> {
@@ -238,22 +307,58 @@ where
         }
     };
 
+    // stdout and stderr must be drained concurrently. Cargo writes most build
+    // progress to stderr; reading stdout to EOF first can fill stderr's pipe and
+    // deadlock both the child and the GUI, which previously looked like an install
+    // that was permanently stuck with no progress output.
+    let (tx, rx) = mpsc::channel::<(String, bool)>();
+    let mut readers = Vec::new();
+
     if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                on_line(l, false);
+        let tx = tx.clone();
+        readers.push(thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        let _ = tx.send((line, false));
+                    }
+                    Err(err) => {
+                        let _ = tx.send((format!("读取 stdout 失败: {}", err), true));
+                        break;
+                    }
+                }
             }
-        }
+        }));
     }
 
     if let Some(stderr) = child.stderr.take() {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines() {
-            if let Ok(l) = line {
-                on_line(l, true);
+        let tx = tx.clone();
+        readers.push(thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                match line {
+                    Ok(line) => {
+                        let _ = tx.send((line, true));
+                    }
+                    Err(err) => {
+                        let _ = tx.send((format!("读取 stderr 失败: {}", err), true));
+                        break;
+                    }
+                }
             }
-        }
+        }));
+    }
+
+    // Drop the original sender so the receiver closes as soon as both reader
+    // threads finish after the child closes its pipes.
+    drop(tx);
+    for (line, is_err) in rx {
+        on_line(line, is_err);
+    }
+
+    for reader in readers {
+        let _ = reader.join();
     }
 
     match child.wait() {
