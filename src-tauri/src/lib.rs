@@ -57,6 +57,7 @@ pub fn run() {
             // Settings
             commands::settings::get_settings,
             commands::settings::update_settings,
+            commands::settings::refresh_process_environment,
             commands::settings::open_path_in_explorer,
             commands::settings::get_app_version,
         ])

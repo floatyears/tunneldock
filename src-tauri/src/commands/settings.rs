@@ -3,6 +3,7 @@ use std::sync::Arc;
 use tauri::State;
 use crate::models::TunnelSettings;
 use crate::state::AppState;
+use crate::utils::cmd::refresh_process_path;
 #[cfg(target_os = "windows")]
 use crate::utils::cmd::execute_cmd;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -21,6 +22,11 @@ pub fn update_settings(
     *state.settings.lock() = new_settings.clone();
     state.save_settings();
     Ok(new_settings)
+}
+
+#[tauri::command]
+pub fn refresh_process_environment() -> bool {
+    refresh_process_path()
 }
 
 #[tauri::command]
