@@ -33,7 +33,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             // Environment
             commands::env::check_environment,
-            commands::env::install_component,
+            commands::install::install_component,
             commands::env::save_tunnel_credentials,
             // Otunnel & Health & Doctor
             commands::otunnel::get_otunnel_status,
