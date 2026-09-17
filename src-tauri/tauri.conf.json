@@ -6,7 +6,7 @@
   "identifier": "io.github.t59688.tunneldock",
   "build": {
     "beforeDevCommand": "npm run dev",
-    "devUrl": "http://localhost:1420",
+    "devUrl": "http://localhost:11420",
     "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
