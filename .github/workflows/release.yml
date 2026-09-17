@@ -1,0 +1,127 @@
+name: Build, sign and attach desktop release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.release.tag_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-desktop:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      # tauri-action merges updater platform entries into the same latest.json.
+      # Serialize the four native builds so parallel release uploads cannot race
+      # and overwrite another platform's updater metadata.
+      max-parallel: 1
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows-latest
+            rust-target: x86_64-pc-windows-msvc
+            tauri-args: --config src-tauri/tauri.release.conf.json --target x86_64-pc-windows-msvc --bundles msi,nsis
+          - name: Linux x64
+            platform: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+            tauri-args: --config src-tauri/tauri.release.conf.json --target x86_64-unknown-linux-gnu --bundles appimage,deb,rpm
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            rust-target: aarch64-apple-darwin
+            tauri-args: --config src-tauri/tauri.release.conf.json --target aarch64-apple-darwin --bundles app,dmg
+          - name: macOS Intel
+            platform: macos-latest
+            rust-target: x86_64-apple-darwin
+            tauri-args: --config src-tauri/tauri.release.conf.json --target x86_64-apple-darwin --bundles app,dmg
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Check out released revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Verify release tag matches version.json
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          node - <<'NODE'
+          const fs = require('fs');
+          const appVersion = JSON.parse(fs.readFileSync('version.json', 'utf8')).version;
+          const tagVersion = process.env.RELEASE_TAG.replace(/^v/, '');
+          if (appVersion !== tagVersion) {
+            console.error(`Release tag ${process.env.RELEASE_TAG} does not match version.json (${appVersion}).`);
+            process.exit(1);
+          }
+          console.log(`Release version verified: ${appVersion}`);
+          NODE
+
+      - name: Require updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "Missing GitHub Actions secret: TAURI_SIGNING_PRIVATE_KEY" >&2
+            exit 1
+          fi
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v4
+        with:
+          node-version: '26'
+          cache: npm
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust-target }}
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libssl-dev \
+            libxdo-dev \
+            patchelf \
+            xdg-utils \
+            rpm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build signed Tauri bundles and attach them to this release
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          releaseId: ${{ github.event.release.id }}
+          tagName: ${{ github.event.release.tag_name }}
+          releaseDraft: false
+          prerelease: ${{ github.event.release.prerelease }}
+          args: ${{ matrix.tauri-args }}
+          retryAttempts: 3
+          releaseAssetNamePattern: '[name]_[version]_[platform]_[arch][setup][ext]'
+          uploadUpdaterJson: true
+          updaterJsonPreferNsis: true
+          uploadUpdaterSignatures: true
+          uploadWorkflowArtifacts: true
+          workflowArtifactNamePattern: '[platform]-[arch]-[bundle]'

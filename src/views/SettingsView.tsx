@@ -8,19 +8,30 @@ import {
   Info,
   Server,
   Tag,
+  RefreshCw,
+  Download,
+  LoaderCircle,
+  Sparkles,
 } from "lucide-react";
 import { TunnelSettings } from "../types";
+import { AppUpdateState } from "../hooks/useAppUpdater";
 import { openPathInExplorer, saveTunnelCredentials } from "../api";
 import { APP_VERSION } from "../version";
 
 interface SettingsViewProps {
   settings: TunnelSettings | null;
   onRefreshSettings: () => void;
+  updateState: AppUpdateState;
+  onCheckUpdates: () => void;
+  onOpenUpdater: () => void;
 }
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   onRefreshSettings,
+  updateState,
+  onCheckUpdates,
+  onOpenUpdater,
 }) => {
   const [tunnelId, setTunnelId] = useState(settings?.tunnel_id || "");
   const [apiKey, setApiKey] = useState(settings?.api_key || "");
@@ -260,36 +271,89 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </ul>
         </div>
 
-        {/* Card 5: Version & Release Information */}
-        <div className="p-5 rounded-lg bg-dark-card border border-zinc-800 space-y-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
-              <Tag className="w-4 h-4 text-emerald-400" />
-              <span>应用版本与更新源 (Single Source of Truth)</span>
-            </h3>
-            <span className="text-xs font-mono px-2 py-0.5 rounded bg-emerald-950/50 text-emerald-400 border border-emerald-800/60 font-medium">
-              v{APP_VERSION}
-            </span>
+        {/* Card 5: Version & In-app Update Center */}
+        <div className="p-5 rounded-lg bg-dark-card border border-zinc-800 space-y-4">
+          <div className="flex items-start justify-between gap-4">
+            <div className="space-y-1">
+              <h3 className="text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300 flex items-center gap-2">
+                <Tag className="w-4 h-4 text-emerald-400" />
+                <span>应用版本与软件更新</span>
+              </h3>
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                启动后自动检查 <span className="text-zinc-300 font-mono">t59688/hola</span> 的 GitHub Release。更新包在应用内部下载，并在安装前验证 Tauri 更新签名。
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={
+                updateState.stage === "available" ||
+                updateState.stage === "downloading" ||
+                updateState.stage === "installing"
+                  ? onOpenUpdater
+                  : onCheckUpdates
+              }
+              disabled={updateState.stage === "checking"}
+              className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-colors disabled:opacity-50 ${
+                updateState.stage === "available"
+                  ? "bg-emerald-950/50 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900/50"
+                  : "bg-zinc-900 text-zinc-300 border-zinc-700 hover:bg-zinc-800"
+              }`}
+            >
+              {updateState.stage === "checking" ? (
+                <LoaderCircle className="w-3.5 h-3.5 animate-spin" />
+              ) : updateState.stage === "available" ? (
+                <Sparkles className="w-3.5 h-3.5" />
+              ) : updateState.stage === "downloading" ? (
+                <Download className="w-3.5 h-3.5" />
+              ) : (
+                <RefreshCw className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {updateState.stage === "checking"
+                  ? "正在检查"
+                  : updateState.stage === "available"
+                  ? `查看 v${updateState.latestVersion}`
+                  : updateState.stage === "downloading"
+                  ? `下载 ${updateState.totalBytes ? `${updateState.progressPercent}%` : "中"}`
+                  : updateState.stage === "installing"
+                  ? "正在安装"
+                  : "检查更新"}
+              </span>
+            </button>
           </div>
 
-          <div className="text-xs text-zinc-400 space-y-2 leading-relaxed">
-            <p>
-              本项目版本采用统一文件管理，所有客户端 UI、CLI、Tauri 配置以及底层 Cargo 打包均严格以根目录 <code className="text-zinc-200 font-mono bg-zinc-950 px-1.5 py-0.5 rounded border border-zinc-800">version.json</code> 为单一真实来源（Single Source of Truth）。
-            </p>
-            <div className="grid grid-cols-3 gap-2 text-[11px] font-mono pt-1">
-              <div className="p-2.5 rounded bg-zinc-950 border border-zinc-800 space-y-0.5">
-                <div className="text-zinc-500">版本定义文件</div>
-                <div className="text-zinc-300">version.json</div>
-              </div>
-              <div className="p-2.5 rounded bg-zinc-950 border border-zinc-800 space-y-0.5">
-                <div className="text-zinc-500">当前全局版本</div>
-                <div className="text-emerald-400 font-medium">v{APP_VERSION}</div>
-              </div>
-              <div className="p-2.5 rounded bg-zinc-950 border border-zinc-800 space-y-0.5">
-                <div className="text-zinc-500">自动同步目标</div>
-                <div className="text-zinc-300">package / tauri / cargo</div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] font-mono">
+            <div className="p-3 rounded bg-zinc-950 border border-zinc-800 space-y-1">
+              <div className="text-zinc-600">当前版本</div>
+              <div className="text-emerald-400 font-medium">v{APP_VERSION}</div>
+            </div>
+            <div className="p-3 rounded bg-zinc-950 border border-zinc-800 space-y-1">
+              <div className="text-zinc-600">更新状态</div>
+              <div className={updateState.stage === "error" ? "text-rose-400" : updateState.stage === "available" ? "text-amber-300" : "text-zinc-300"}>
+                {updateState.stage === "available"
+                  ? `发现 v${updateState.latestVersion}`
+                  : updateState.stage === "downloading"
+                  ? "后台下载中"
+                  : updateState.stage === "installing"
+                  ? "安装中"
+                  : updateState.stage === "installed"
+                  ? "已安装，重启后生效"
+                  : updateState.stage === "error"
+                  ? "检查/更新失败"
+                  : updateState.stage === "checking"
+                  ? "检查中"
+                  : "已启用自动检查"}
               </div>
             </div>
+            <div className="p-3 rounded bg-zinc-950 border border-zinc-800 space-y-1">
+              <div className="text-zinc-600">Release 源</div>
+              <div className="text-zinc-300 truncate">github.com/t59688/hola</div>
+            </div>
+          </div>
+
+          <div className="text-[11px] text-zinc-600 leading-relaxed">
+            版本号仍以根目录 <code className="text-zinc-400 font-mono">version.json</code> 为单一真实来源；Release 工作流会校验 Git tag 与版本一致后生成三端更新资产、签名和 <code className="text-zinc-400 font-mono">latest.json</code>。
           </div>
         </div>
       </div>

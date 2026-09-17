@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { Header } from "./components/Header";
+import { TitleBar } from "./components/TitleBar";
+import { UpdateDialog } from "./components/UpdateDialog";
 import { Sidebar, NavTab } from "./components/Sidebar";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { EnvironmentView } from "./views/EnvironmentView";
@@ -16,6 +18,7 @@ import {
   TunnelSettings,
   InstallProgressEvent,
 } from "./types";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 import {
   checkEnvironment,
   listWorkspaces,
@@ -28,6 +31,7 @@ import {
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavTab>("env");
+  const updater = useAppUpdater();
 
   // Core States
   const [envItems, setEnvItems] = useState<EnvCheckItem[]>([]);
@@ -209,6 +213,9 @@ export const App: React.FC = () => {
 
   return (
     <div className="h-screen w-screen flex flex-col bg-dark-bg text-zinc-100 overflow-hidden font-sans">
+      {/* Fully themed cross-platform window chrome */}
+      <TitleBar />
+
       {/* Top Header */}
       <Header
         otunnelStatus={otunnelStatus}
@@ -216,6 +223,8 @@ export const App: React.FC = () => {
         onToggleOtunnel={handleToggleOtunnel}
         isTogglingOtunnel={isTogglingOtunnel}
         onRefresh={refreshAll}
+        updateState={updater.state}
+        onOpenUpdater={updater.openDialog}
       />
 
       {/* Main Workspace Frame */}
@@ -274,6 +283,9 @@ export const App: React.FC = () => {
             <SettingsView
               settings={settings}
               onRefreshSettings={loadSettingsData}
+              updateState={updater.state}
+              onCheckUpdates={() => updater.checkForUpdates(true)}
+              onOpenUpdater={updater.openDialog}
             />
           )}
         </main>
@@ -286,6 +298,14 @@ export const App: React.FC = () => {
         onClose={() => setTerminalOpen(false)}
         logs={terminalLogs}
         onClear={() => setTerminalLogs([])}
+      />
+
+      <UpdateDialog
+        open={updater.dialogOpen}
+        state={updater.state}
+        onClose={updater.closeDialog}
+        onCheck={() => updater.checkForUpdates(true)}
+        onInstall={updater.downloadAndInstall}
       />
     </div>
   );

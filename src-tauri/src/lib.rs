@@ -4,30 +4,31 @@ pub mod utils;
 pub mod commands;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use state::AppState;
 use tauri::Manager;
 
 pub fn run() {
     let app_state = Arc::new(AppState::new());
-    let state_window = app_state.clone();
     let state_exit = app_state.clone();
+    let exit_cleanup_started = Arc::new(AtomicBool::new(false));
+    let exit_cleanup_flag = exit_cleanup_started.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .setup(|app| {
+            #[cfg(desktop)]
+            app.handle()
+                .plugin(tauri_plugin_updater::Builder::new().build())?;
+
             if let Some(window) = app.get_webview_window("main") {
                 if let Some(icon) = app.default_window_icon() {
                     let _ = window.set_icon(icon.clone());
                 }
             }
             Ok(())
-        })
-        .on_window_event(move |_window, event| {
-            if let tauri::WindowEvent::CloseRequested { .. } = event {
-                state_window.cleanup_all_processes();
-            }
         })
         .invoke_handler(tauri::generate_handler![
             // Environment
@@ -61,8 +62,24 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(move |_app, event| match event {
-            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+        .run(move |app, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                // Never perform process-tree teardown on Tauri's UI/event thread.
+                // Doing so used to block window close long enough for Windows to
+                // mark the application as "Not responding".
+                if !exit_cleanup_flag.swap(true, Ordering::AcqRel) {
+                    api.prevent_exit();
+                    let app_handle = app.clone();
+                    let state = state_exit.clone();
+                    std::thread::spawn(move || {
+                        state.cleanup_all_processes();
+                        app_handle.exit(0);
+                    });
+                }
+            }
+            tauri::RunEvent::Exit => {
+                // Fallback for platform-specific exit paths. AppState cleanup is
+                // idempotent, so this is a no-op if the background cleanup ran.
                 state_exit.cleanup_all_processes();
             }
             _ => {}

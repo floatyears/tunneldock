@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use parking_lot::Mutex;
 use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
@@ -16,6 +17,7 @@ pub struct AppState {
     pub history: Arc<Mutex<Vec<McpCallRecord>>>,
     pub settings: Arc<Mutex<TunnelSettings>>,
     pub app_data_dir: PathBuf,
+    cleanup_started: AtomicBool,
 }
 
 impl AppState {
@@ -37,31 +39,34 @@ impl AppState {
             history: Arc::new(Mutex::new(history)),
             settings: Arc::new(Mutex::new(settings)),
             app_data_dir,
+            cleanup_started: AtomicBool::new(false),
         }
     }
 
     pub fn cleanup_all_processes(&self) {
-        // 1. Terminate otunnel process tree and all otunnel instances
-        if let Some(pid) = *self.otunnel_pid.lock() {
-            kill_process_tree(pid);
-            *self.otunnel_pid.lock() = None;
-        }
-        #[cfg(target_os = "windows")]
-        {
-            let _ = crate::utils::cmd::execute_raw("taskkill.exe", &["/F", "/IM", "otunnel.exe", "/T"], None);
+        // Shutdown can be observed through ExitRequested, Exit and Drop. Only the
+        // first caller performs cleanup so we never wait on the same children more
+        // than once during application teardown.
+        if self.cleanup_started.swap(true, Ordering::AcqRel) {
+            return;
         }
 
-        // 2. Drop all running workspace stdins (signals EOF to children)
+        // 1. Close RPC stdin first so well-behaved Pi children can observe EOF.
         self.running_workspace_stdins.lock().clear();
 
-        // 3. Force kill all running workspace processes and their trees
-        let pids: Vec<u32> = self.running_workspace_pids.lock().values().copied().collect();
-        for pid in pids {
-            kill_process_tree(pid);
+        // 2. Terminate only processes owned/tracked by this application. The
+        // platform-neutral sysinfo implementation avoids blocking shell commands.
+        if let Some(pid) = self.otunnel_pid.lock().take() {
+            let _ = kill_process_tree(pid);
         }
-        self.running_workspace_pids.lock().clear();
 
-        // 4. Mark workspaces as stopped
+        let pids: Vec<u32> = self.running_workspace_pids.lock().values().copied().collect();
+        self.running_workspace_pids.lock().clear();
+        for pid in pids {
+            let _ = kill_process_tree(pid);
+        }
+
+        // 3. Persist a clean stopped state for the next launch.
         let mut list = self.workspaces.lock();
         for w in list.iter_mut() {
             w.status = "stopped".to_string();

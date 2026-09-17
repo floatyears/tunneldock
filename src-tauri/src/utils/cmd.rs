@@ -120,31 +120,79 @@ pub fn find_executable(name: &str) -> Option<String> {
     None
 }
 
+/// Kill a process and every currently-visible descendant without invoking a shell.
+///
+/// Using sysinfo here is intentional: spawning `taskkill`, `killall`, PowerShell, or
+/// a platform shell from the GUI shutdown path can block the Tauri event loop and
+/// was the primary cause of the app becoming "Not responding" while closing.
 pub fn kill_process_tree(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let out = execute_raw("taskkill.exe", &["/F", "/T", "/PID", &pid.to_string()], None);
-        out.success
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    let root = Pid::from_u32(pid);
+    if system.process(root).is_none() {
+        // The process is already gone, which is the desired post-condition.
+        return true;
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let out = execute_raw("kill", &["-9", &pid.to_string()], None);
-        out.success
+
+    let mut tree = vec![root];
+    loop {
+        let before = tree.len();
+        for (candidate_pid, process) in system.processes() {
+            if let Some(parent) = process.parent() {
+                if tree.contains(&parent) && !tree.contains(candidate_pid) {
+                    tree.push(*candidate_pid);
+                }
+            }
+        }
+        if tree.len() == before {
+            break;
+        }
     }
+
+    // Children first, parent last. `kill()` maps to the native force-termination
+    // primitive on Windows, macOS and Linux and does not create a console window.
+    let mut success = true;
+    for process_pid in tree.into_iter().rev() {
+        if let Some(process) = system.process(process_pid) {
+            if !process.kill() {
+                success = false;
+            }
+        }
+    }
+    success
 }
 
 pub fn is_process_running(pid: u32) -> bool {
-    #[cfg(target_os = "windows")]
-    {
-        let check = format!("Get-Process -Id {} -ErrorAction SilentlyContinue", pid);
-        let out = execute_powershell(&check, None);
-        out.success && !out.stdout.trim().is_empty()
+    use sysinfo::{Pid, ProcessesToUpdate, System};
+
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::Some(&[Pid::from_u32(pid)]), true);
+    system.process(Pid::from_u32(pid)).is_some()
+}
+
+/// Find a process by executable name in a platform-neutral way.
+/// `.exe` is ignored so callers can consistently use names such as `otunnel`.
+pub fn find_process_by_name(name: &str) -> Option<u32> {
+    use sysinfo::{ProcessesToUpdate, System};
+
+    fn normalize(value: &str) -> String {
+        value
+            .trim()
+            .trim_end_matches(".exe")
+            .to_ascii_lowercase()
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let out = execute_raw("kill", &["-0", &pid.to_string()], None);
-        out.success
-    }
+
+    let expected = normalize(name);
+    let mut system = System::new();
+    system.refresh_processes(ProcessesToUpdate::All, true);
+
+    system.processes().iter().find_map(|(pid, process)| {
+        let actual = normalize(&process.name().to_string_lossy());
+        (actual == expected).then(|| pid.as_u32())
+    })
 }
 
 pub fn run_streaming<F>(

@@ -1,6 +1,7 @@
 import React from "react";
-import { RefreshCw, Power, Radio } from "lucide-react";
+import { Download, LoaderCircle, RefreshCw, Power, Radio, Sparkles } from "lucide-react";
 import { OtunnelDaemonStatus } from "../types";
+import { AppUpdateState } from "../hooks/useAppUpdater";
 
 import { APP_VERSION } from "../version";
 
@@ -10,6 +11,8 @@ interface HeaderProps {
   onToggleOtunnel: () => void;
   isTogglingOtunnel: boolean;
   onRefresh: () => void;
+  updateState: AppUpdateState;
+  onOpenUpdater: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,6 +21,8 @@ export const Header: React.FC<HeaderProps> = ({
   onToggleOtunnel,
   isTogglingOtunnel,
   onRefresh,
+  updateState,
+  onOpenUpdater,
 }) => {
   const isOnline = otunnelStatus?.running && otunnelStatus?.healthz_ok;
 
@@ -35,9 +40,47 @@ export const Header: React.FC<HeaderProps> = ({
             <h1 className="text-sm font-semibold tracking-wide text-zinc-100">
               CHAPPIE STUDIO
             </h1>
-            <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-medium">
+            <button
+              type="button"
+              onClick={onOpenUpdater}
+              className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 font-medium hover:bg-emerald-900/60 transition-colors"
+              title="打开软件更新中心"
+            >
               v{APP_VERSION}
-            </span>
+            </button>
+            {updateState.stage === "available" && (
+              <button
+                type="button"
+                onClick={onOpenUpdater}
+                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-amber-950/50 text-amber-300 border border-amber-800/60 hover:bg-amber-900/50 transition-colors"
+                title={`发现新版本 v${updateState.latestVersion}`}
+              >
+                <Sparkles className="w-3 h-3" />
+                <span>v{updateState.latestVersion}</span>
+              </button>
+            )}
+            {updateState.stage === "downloading" && (
+              <button
+                type="button"
+                onClick={onOpenUpdater}
+                className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-sky-950/50 text-sky-300 border border-sky-800/60 hover:bg-sky-900/50 transition-colors"
+                title="更新包正在后台下载"
+              >
+                <Download className="w-3 h-3" />
+                <span>{updateState.totalBytes ? `${updateState.progressPercent}%` : "下载中"}</span>
+              </button>
+            )}
+            {updateState.stage === "installing" && (
+              <button
+                type="button"
+                onClick={onOpenUpdater}
+                className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-emerald-950/50 text-emerald-300 border border-emerald-800/60"
+                title="正在安装更新"
+              >
+                <LoaderCircle className="w-3 h-3 animate-spin" />
+                <span>安装中</span>
+              </button>
+            )}
           </div>
           <p className="text-[11px] text-zinc-500 font-mono">
             OpenAI Secure MCP Tunnel + Pi Runtime

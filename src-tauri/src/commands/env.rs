@@ -2,12 +2,18 @@ use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use crate::models::{EnvCheckItem, InstallProgressEvent, TunnelSettings};
-use crate::utils::cmd::{execute_cmd, execute_powershell, find_executable, run_streaming};
+use crate::utils::cmd::{execute_cmd, find_executable, run_streaming};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_chappie_yaml};
 
 #[tauri::command]
 pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
     let mut items = Vec::new();
+    // System-level installers differ by OS. Windows has winget and macOS can
+    // safely use Homebrew when present. Linux distributions vary too much to
+    // silently choose a privileged package manager from a desktop GUI.
+    let can_install_system_package = cfg!(target_os = "windows")
+        || (cfg!(target_os = "macos") && find_executable("brew").is_some());
+    let can_bootstrap_rust = cfg!(target_os = "windows") || find_executable("curl").is_some();
 
     // 1. Node.js
     let node_path = find_executable("node");
@@ -21,7 +27,7 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
         path: node_path.clone(),
         status: "missing".to_string(),
         message: "未检测到 Node.js，Chappie 运行依赖 Node >= 26".to_string(),
-        can_auto_install: true,
+        can_auto_install: can_install_system_package,
     };
 
     if node_path.is_some() {
@@ -65,7 +71,7 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
         path: npm_path.clone(),
         status: "missing".to_string(),
         message: "未检测到 npm".to_string(),
-        can_auto_install: true,
+        can_auto_install: can_install_system_package,
     };
     if npm_path.is_some() {
         let out = execute_cmd("npm", &["-v"], None);
@@ -90,7 +96,7 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
         path: git_path.clone(),
         status: "missing".to_string(),
         message: "未安装 Git，ChatGPT 将无法执行 git 状态与分支操作".to_string(),
-        can_auto_install: true,
+        can_auto_install: can_install_system_package,
     };
     if git_path.is_some() {
         let out = execute_cmd("git", &["--version"], None);
@@ -115,7 +121,7 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
         path: cargo_path.clone(),
         status: "missing".to_string(),
         message: "未检测到 Cargo (用于构建与更新 otunnel)".to_string(),
-        can_auto_install: true,
+        can_auto_install: can_bootstrap_rust,
     };
     if cargo_path.is_some() {
         let out = execute_cmd("cargo", &["-V"], None);
@@ -129,8 +135,7 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
     items.push(cargo_item);
 
     // 5. cargo-binstall
-    let binstall_path = find_executable("cargo-binstall")
-        .or_else(|| find_executable("cargo-binstall.exe"));
+    let binstall_path = find_executable("cargo-binstall");
     let mut binstall_item = EnvCheckItem {
         id: "cargo_binstall".to_string(),
         name: "cargo-binstall 极速安装器".to_string(),
@@ -201,13 +206,9 @@ pub async fn check_environment() -> Result<Vec<EnvCheckItem>, String> {
         can_auto_install: true,
     };
     if pi_path.is_some() {
-        let mut out = execute_cmd("pi", &["--version"], None);
-        if !out.success || out.stdout.trim().is_empty() {
-            out = execute_cmd("pi.cmd", &["--version"], None);
-        }
-        if !out.success || out.stdout.trim().is_empty() {
-            out = execute_powershell("pi --version", None);
-        }
+        // execute_cmd resolves .cmd wrappers through PATHEXT on Windows and
+        // invokes the executable directly on macOS/Linux.
+        let out = execute_cmd("pi", &["--version"], None);
 
         if out.success && !out.stdout.trim().is_empty() {
             let ver = out.stdout.lines().next().unwrap_or("").trim().to_string();
@@ -379,87 +380,128 @@ pub async fn install_component(app: AppHandle, item_id: String) -> Result<bool, 
     let log_fn = emit_log.clone();
 
     match item_id.as_str() {
-        "node" => {
-            log_fn("正在使用 winget 安装最新版 Node.js (>=26)...".to_string(), false);
-            let ok = run_streaming(
-                "winget.exe",
-                &["install", "--id", "OpenJS.NodeJS", "-e", "--accept-source-agreements", "--accept-package-agreements"],
-                None,
-                emit_log,
-            );
-            Ok(ok)
+        "node" | "npm" => {
+            #[cfg(target_os = "windows")]
+            {
+                log_fn("正在使用 winget 安装最新版 Node.js (包含 npm)...".to_string(), false);
+                return Ok(run_streaming(
+                    "winget",
+                    &["install", "--id", "OpenJS.NodeJS", "-e", "--accept-source-agreements", "--accept-package-agreements"],
+                    None,
+                    emit_log,
+                ));
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if find_executable("brew").is_none() {
+                    return Err("macOS 自动安装 Node.js 需要 Homebrew；请先安装 Homebrew 或手动安装 Node.js >= 26".to_string());
+                }
+                log_fn("正在使用 Homebrew 安装最新版 Node.js (包含 npm)...".to_string(), false);
+                return Ok(run_streaming("brew", &["install", "node"], None, emit_log));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                Err("Linux 发行版的软件源差异较大，为避免自动安装到低于 26 的 Node.js，请使用你的发行版或 Node 官方方式安装 Node.js >= 26".to_string())
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+            {
+                Err("当前平台不支持自动安装 Node.js".to_string())
+            }
         }
         "git" => {
-            log_fn("正在使用 winget 安装 Git...".to_string(), false);
-            let ok = run_streaming(
-                "winget.exe",
-                &["install", "--id", "Git.Git", "-e", "--accept-source-agreements", "--accept-package-agreements"],
-                None,
-                emit_log,
-            );
-            Ok(ok)
+            #[cfg(target_os = "windows")]
+            {
+                log_fn("正在使用 winget 安装 Git...".to_string(), false);
+                return Ok(run_streaming(
+                    "winget",
+                    &["install", "--id", "Git.Git", "-e", "--accept-source-agreements", "--accept-package-agreements"],
+                    None,
+                    emit_log,
+                ));
+            }
+            #[cfg(target_os = "macos")]
+            {
+                if find_executable("brew").is_none() {
+                    return Err("macOS 自动安装 Git 需要 Homebrew；也可以运行 xcode-select --install".to_string());
+                }
+                log_fn("正在使用 Homebrew 安装 Git...".to_string(), false);
+                return Ok(run_streaming("brew", &["install", "git"], None, emit_log));
+            }
+            #[cfg(target_os = "linux")]
+            {
+                Err("请使用当前 Linux 发行版的包管理器安装 Git（例如 apt/dnf/pacman）；应用不会在后台静默请求 root 权限".to_string())
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+            {
+                Err("当前平台不支持自动安装 Git".to_string())
+            }
         }
         "cargo" => {
-            log_fn("正在安装 Rust 工具链 (rustup)...".to_string(), false);
-            let ok = run_streaming(
-                "winget.exe",
-                &["install", "--id", "Rustlang.Rustup", "-e", "--accept-source-agreements", "--accept-package-agreements"],
-                None,
-                emit_log,
-            );
-            Ok(ok)
+            #[cfg(target_os = "windows")]
+            {
+                log_fn("正在使用 winget 安装 Rustup / Cargo...".to_string(), false);
+                return Ok(run_streaming(
+                    "winget",
+                    &["install", "--id", "Rustlang.Rustup", "-e", "--accept-source-agreements", "--accept-package-agreements"],
+                    None,
+                    emit_log,
+                ));
+            }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            {
+                if find_executable("curl").is_none() {
+                    return Err("自动安装 Rust 需要 curl，请先安装 curl 或手动安装 rustup".to_string());
+                }
+                log_fn("正在通过 rustup 官方安装脚本安装 Rust / Cargo...".to_string(), false);
+                return Ok(run_streaming(
+                    "sh",
+                    &["-c", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"],
+                    None,
+                    emit_log,
+                ));
+            }
+            #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+            {
+                Err("当前平台不支持自动安装 Rust".to_string())
+            }
         }
         "cargo_binstall" => {
             log_fn("正在执行 cargo install cargo-binstall --locked...".to_string(), false);
-            let ok = run_streaming(
-                "cargo.exe",
+            Ok(run_streaming(
+                "cargo",
                 &["install", "cargo-binstall", "--locked"],
                 None,
                 emit_log,
-            );
-            Ok(ok)
+            ))
         }
         "otunnel" => {
             log_fn("正在安装 otunnel 客户端...".to_string(), false);
-            let binstall_exists = find_executable("cargo-binstall").is_some();
-            let ok = if binstall_exists {
-                log_fn("使用 cargo binstall otunnel 极速安装...".to_string(), false);
-                run_streaming(
-                    "cargo-binstall.exe",
-                    &["otunnel", "-y"],
-                    None,
-                    emit_log,
-                )
+            let ok = if find_executable("cargo-binstall").is_some() {
+                log_fn("使用 cargo-binstall 安装 otunnel...".to_string(), false);
+                run_streaming("cargo-binstall", &["otunnel", "-y"], None, emit_log)
             } else {
                 log_fn("使用 cargo install otunnel 编译安装...".to_string(), false);
-                run_streaming(
-                    "cargo.exe",
-                    &["install", "otunnel", "--locked"],
-                    None,
-                    emit_log,
-                )
+                run_streaming("cargo", &["install", "otunnel", "--locked"], None, emit_log)
             };
             Ok(ok)
         }
         "pi" => {
             log_fn("正在全局安装 @earendil-works/pi-coding-agent...".to_string(), false);
-            let ok = run_streaming(
-                "npm.cmd",
+            Ok(run_streaming(
+                "npm",
                 &["install", "-g", "--ignore-scripts", "@earendil-works/pi-coding-agent"],
                 None,
                 emit_log,
-            );
-            Ok(ok)
+            ))
         }
         "chappie" => {
             log_fn("正在为 Pi 安装 Chappie 扩展: pi install npm:@zetaloop/chappie...".to_string(), false);
-            let ok = run_streaming(
-                "pi.cmd",
+            Ok(run_streaming(
+                "pi",
                 &["install", "npm:@zetaloop/chappie"],
                 None,
                 emit_log,
-            );
-            Ok(ok)
+            ))
         }
         _ => Err(format!("未知的安装组件: {}", item_id)),
     }

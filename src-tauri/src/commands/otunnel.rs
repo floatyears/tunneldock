@@ -5,7 +5,7 @@ use std::time::Instant;
 use tauri::State;
 use crate::models::{DoctorCheckItem, DoctorReport, OtunnelDaemonStatus};
 use crate::state::AppState;
-use crate::utils::cmd::{execute_cmd, execute_powershell, is_process_running, kill_process_tree};
+use crate::utils::cmd::{execute_cmd, find_process_by_name, is_process_running, kill_process_tree};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
 
 #[cfg(target_os = "windows")]
@@ -30,17 +30,12 @@ pub async fn get_otunnel_status(state: State<'_, Arc<AppState>>) -> Result<Otunn
         *state.otunnel_pid.lock() = None;
         pid = None;
 
-        // Look up by process name in system
-        let check = execute_powershell(
-            "Get-Process -Name otunnel -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Id -First 1",
-            None,
-        );
-        if check.success && !check.stdout.trim().is_empty() {
-            if let Ok(sys_pid) = check.stdout.trim().parse::<u32>() {
-                running = true;
-                pid = Some(sys_pid);
-                *state.otunnel_pid.lock() = Some(sys_pid);
-            }
+        // Look up by process name without PowerShell/ps so this works on all
+        // desktop platforms and does not create or block on a shell process.
+        if let Some(sys_pid) = find_process_by_name("otunnel") {
+            running = true;
+            pid = Some(sys_pid);
+            *state.otunnel_pid.lock() = Some(sys_pid);
         }
     }
 
@@ -169,19 +164,12 @@ pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
         *state.otunnel_pid.lock() = None;
     }
 
-    // Also ensure all otunnel.exe processes and their child trees are terminated
-    #[cfg(target_os = "windows")]
-    {
-        let out = crate::utils::cmd::execute_raw("taskkill.exe", &["/F", "/IM", "otunnel.exe", "/T"], None);
-        if out.success {
-            killed = true;
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        let kill_all = execute_powershell("killall -9 otunnel 2>/dev/null", None);
-        if kill_all.success {
-            killed = true;
+    // If the daemon was started outside the current in-memory state but is still
+    // discoverable by name, terminate that single daemon as a fallback. This is
+    // platform-neutral and avoids broad `killall`/`taskkill /IM` side effects.
+    if !killed {
+        if let Some(pid) = find_process_by_name("otunnel") {
+            killed = kill_process_tree(pid);
         }
     }
 
