@@ -1,10 +1,9 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, State};
-use tokio::sync::Mutex;
 
 use crate::models::InstallProgressEvent;
 use crate::state::AppState;
@@ -12,12 +11,7 @@ use crate::utils::cmd::{
     execute_cmd, find_executable, kill_process_tree, refresh_process_path, run_streaming,
 };
 use crate::utils::paths::{chappie_yaml_paths, remove_chappie_yaml_files};
-
-static UNINSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn uninstall_lock() -> &'static Mutex<()> {
-    UNINSTALL_LOCK.get_or_init(|| Mutex::new(()))
-}
+use super::operation::component_operation_lock;
 
 #[derive(Clone)]
 struct UninstallLogger {
@@ -541,9 +535,9 @@ pub async fn uninstall_component(
     state: State<'_, Arc<AppState>>,
     item_id: String,
 ) -> Result<bool, String> {
-    // Serialize destructive removals so repeated clicks cannot mutate the same
-    // package-manager/toolchain state concurrently.
-    let _guard = uninstall_lock().lock().await;
+    // Same lock as install_component_v2: package managers, PATH and toolchains are
+    // shared mutable state and must never be changed by overlapping IPC requests.
+    let _guard = component_operation_lock().lock().await;
 
     let state = state.inner().clone();
     let failure_app = app.clone();
