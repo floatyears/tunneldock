@@ -27,6 +27,7 @@ import {
   getSettings,
   startOtunnel,
   stopOtunnel,
+  refreshProcessEnvironment,
 } from "./api";
 
 export const App: React.FC = () => {
@@ -59,6 +60,15 @@ export const App: React.FC = () => {
   const loadEnv = useCallback(async () => {
     try {
       setEnvLoading(true);
+      try {
+        // Installers such as winget update persistent PATH, but a running desktop
+        // process keeps the environment it inherited at startup. Refresh before
+        // every environment scan so newly installed tools are detected immediately
+        // without asking the user to restart TunnelDock.
+        await refreshProcessEnvironment();
+      } catch (e) {
+        console.warn("Failed to refresh process environment:", e);
+      }
       const items = await checkEnvironment();
       setEnvItems(items);
     } catch (e) {
