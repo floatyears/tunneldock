@@ -34,6 +34,7 @@ pub fn run() {
             // Environment
             commands::env::check_environment,
             commands::install::install_component_v2,
+            commands::uninstall::uninstall_component,
             commands::env::save_tunnel_credentials,
             // Otunnel & Health & Doctor
             commands::otunnel::get_otunnel_status,
