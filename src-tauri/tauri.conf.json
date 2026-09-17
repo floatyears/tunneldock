@@ -1,8 +1,9 @@
 {
   "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/config.schema.json",
-  "productName": "Chappie Studio",
+  "productName": "Local MCP Console",
+  "mainBinaryName": "local-mcp-console",
   "version": "../version.json",
-  "identifier": "com.chappie.studio",
+  "identifier": "io.github.t59688.localmcpconsole",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +13,7 @@
   "app": {
     "windows": [
       {
-        "title": "Chappie Studio — OpenAI Tunnel & Pi Workspace",
+        "title": "Local MCP Console — OpenAI Tunnel & Pi Workspace",
         "width": 1260,
         "height": 840,
         "minWidth": 1050,

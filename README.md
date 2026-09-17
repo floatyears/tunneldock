@@ -1,7 +1,7 @@
-# Chappie Studio
+# Local MCP Console
 
 <p align="center">
-  <img src="./app-icon.svg" alt="Chappie Studio" width="96" />
+  <img src="./app-icon.svg" alt="Local MCP Console" width="96" />
 </p>
 
 <p>
@@ -11,9 +11,11 @@
   <a href="https://github.com/t59688/hola/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/t59688/hola/release.yml" /></a>
 </p>
 
-**Chappie Studio** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
+**Local MCP Console** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
 
 > 核心理念：**ChatGPT 负责思考与上下文，Pi 负责本地执行**。
+>
+> `Chappie` 在本项目中仅指 [@zetaloop/chappie](https://www.npmjs.com/package/@zetaloop/chappie) 上游依赖和对应 CLI/profile 配置，不是本软件的产品名称或品牌。
 
 ## 目录
 
@@ -55,7 +57,7 @@ ChatGPT 网页版
 OpenAI Secure MCP Tunnel
       │
       ▼
-    otunnel              ← Chappie Studio 管理其生命周期、健康与诊断
+    otunnel              ← Local MCP Console 管理其生命周期、健康与诊断
       │
       │ stdio
       ▼
@@ -116,7 +118,9 @@ npm run tauri build
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
 | `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认端口 `8080`）、MCP 目标（`pi --chappie`） |
-| 应用数据目录 | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
+| 系统数据目录下的 `local-mcp-console/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
+
+从旧版 `chappie-desktop/` 升级时，Local MCP Console 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
 
 > 切勿将 `tunnelkey.txt` 或任何 API Key 提交到代码仓库。
 
@@ -148,7 +152,6 @@ hola/
 ├── .github/workflows/          # release.yml 发布流水线
 └── version.json                # 版本唯一来源
 ```
-
 
 ## 安全须知
 
@@ -187,6 +190,7 @@ hola/
 ## 免责声明
 
 - 本项目为社区开源工具，**与 OpenAI 官方无关**，非 OpenAI 官方产品；
+- Chappie、otunnel、Pi 及其相关名称属于各自上游项目；Local MCP Console 仅集成这些组件，不宣称与其品牌存在从属或官方关系；
 - 本工具会将 ChatGPT 网页版的工具调用转发到本地执行，请充分理解其中的安全风险并自行负责使用后果；
 - 作者不对使用本软件导致的任何数据丢失或损失承担责任。
 
@@ -195,4 +199,3 @@ hola/
 <p align="center">
   <b>让 ChatGPT 安全、透明、可审计地触达你的本地项目。</b>
 </p>
-

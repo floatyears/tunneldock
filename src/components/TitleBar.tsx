@@ -76,7 +76,7 @@ export const TitleBar: React.FC = () => {
           data-tauri-drag-region
           className="text-[11px] font-medium tracking-wide text-zinc-400 truncate"
         >
-          Chappie Studio — OpenAI Tunnel & Pi Workspace
+          Local MCP Console — OpenAI Tunnel & Pi Workspace
         </span>
       </div>
 
