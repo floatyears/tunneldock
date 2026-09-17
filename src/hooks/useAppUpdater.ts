@@ -77,7 +77,7 @@ export function useAppUpdater() {
           setState((prev) => ({
             ...prev,
             stage: "error",
-            errorMessage: "更新检查仅在 Chappie Studio 桌面应用中可用。",
+            errorMessage: "更新检查仅在 TunnelDock 桌面应用中可用。",
           }));
           setDialogOpen(true);
         }

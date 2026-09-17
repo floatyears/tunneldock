@@ -140,7 +140,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
               />
               <p className="text-[11px] text-zinc-500">
-                在 OpenAI 组织设置中的 Tunnels 页面创建，名称建议为 Chappie。
+                在 OpenAI 组织设置中的 Tunnels 页面创建，名称建议为 TunnelDock。
               </p>
             </div>
 
@@ -280,7 +280,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span>应用版本与软件更新</span>
               </h3>
               <p className="text-xs text-zinc-500 leading-relaxed">
-                启动后自动检查 <span className="text-zinc-300 font-mono">t59688/hola</span> 的 GitHub Release。更新包在应用内部下载，并在安装前验证 Tauri 更新签名。
+                启动后自动检查 <span className="text-zinc-300 font-mono">t59688/tunneldock</span> 的 GitHub Release。更新包在应用内部下载，并在安装前验证 Tauri 更新签名。
               </p>
             </div>
 
@@ -348,7 +348,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
             <div className="p-3 rounded bg-zinc-950 border border-zinc-800 space-y-1">
               <div className="text-zinc-600">Release 源</div>
-              <div className="text-zinc-300 truncate">github.com/t59688/hola</div>
+              <div className="text-zinc-300 truncate">github.com/t59688/tunneldock</div>
             </div>
           </div>
 
