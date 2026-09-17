@@ -1,18 +1,11 @@
 use std::env;
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 use tauri::{AppHandle, Emitter};
-use tokio::sync::Mutex;
 
 use crate::models::InstallProgressEvent;
 use crate::utils::cmd::{execute_cmd, find_executable, refresh_process_path, run_streaming};
-
-static INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-fn install_lock() -> &'static Mutex<()> {
-    INSTALL_LOCK.get_or_init(|| Mutex::new(()))
-}
+use super::operation::component_operation_lock;
 
 #[derive(Clone)]
 struct InstallLogger {
@@ -323,8 +316,6 @@ fn install_otunnel(logger: &InstallLogger) -> Result<bool, String> {
                 ],
             )
         } else {
-            // cargo-binstall can still be invoked directly if Cargo disappeared from PATH.
-            // Source-build fallback below still requires Cargo.
             run_logged(
                 logger,
                 "cargo-binstall",
@@ -380,9 +371,6 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
     logger.emit("starting", format!("开始处理组件: {}", item_id), false);
     refresh_runtime_environment();
 
-    // Idempotency: an already-valid post-condition is success. This also makes
-    // "一键全自动装配" safe when an earlier step installed a dependency that also
-    // appears later in the original missing-items snapshot (for example Node + npm).
     if let Ok(message) = verify_component(&item_id) {
         logger.success(format!("无需重复安装：{}", message));
         return Ok(true);
@@ -547,12 +535,11 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
 
 #[tauri::command]
 pub async fn install_component_v2(app: AppHandle, item_id: String) -> Result<bool, String> {
-    // Package managers mutate shared PATH/toolchain state. Serialize installs so
-    // double-clicks or multiple cards cannot run winget/cargo/npm concurrently.
-    let _guard = install_lock().lock().await;
+    // Install and uninstall mutate the same package-manager/toolchain state. Use
+    // one backend lock so overlapping IPC calls cannot race even if frontend state
+    // is bypassed.
+    let _guard = component_operation_lock().lock().await;
 
-    // Package installs and Cargo compilation are blocking operations. Keep them off
-    // Tauri/Tokio's async worker threads so health polling and window IPC stay alive.
     let failure_app = app.clone();
     let failure_item_id = item_id.clone();
     let result = tokio::task::spawn_blocking(move || install_component_blocking(app, item_id))

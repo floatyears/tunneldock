@@ -21,6 +21,14 @@ export async function installComponent(itemId: string): Promise<boolean> {
   return true;
 }
 
+export async function uninstallComponent(itemId: string): Promise<boolean> {
+  const ok = await invoke<boolean>("uninstall_component", { itemId });
+  if (!ok) {
+    throw new Error(`组件 ${itemId} 卸载后未通过移除验证`);
+  }
+  return true;
+}
+
 export async function saveTunnelCredentials(
   tunnelId: string,
   apiKey: string,
