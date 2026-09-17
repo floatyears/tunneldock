@@ -300,6 +300,77 @@ fn install_node_macos(logger: &InstallLogger, repair_npm: bool) -> Result<bool, 
     Ok(run_logged(logger, "brew", &["install", "node"]))
 }
 
+fn install_otunnel(logger: &InstallLogger) -> Result<bool, String> {
+    let cargo_available = find_executable("cargo").is_some();
+    let binstall_available = find_executable("cargo-binstall").is_some();
+
+    if binstall_available {
+        logger.info(
+            "检测到 cargo-binstall，使用 cargo binstall 的无人值守模式安装 otunnel；禁用遥测，避免首次运行等待交互输入。"
+                .to_string(),
+        );
+
+        let binstall_ok = if cargo_available {
+            run_logged(
+                logger,
+                "cargo",
+                &[
+                    "binstall",
+                    "otunnel",
+                    "--no-confirm",
+                    "--disable-telemetry",
+                    "--locked",
+                ],
+            )
+        } else {
+            // cargo-binstall can still be invoked directly if Cargo disappeared from PATH.
+            // Source-build fallback below still requires Cargo.
+            run_logged(
+                logger,
+                "cargo-binstall",
+                &[
+                    "otunnel",
+                    "--no-confirm",
+                    "--disable-telemetry",
+                    "--locked",
+                ],
+            )
+        };
+
+        refresh_runtime_environment();
+        if verify_simple("otunnel", &["--version"], "otunnel").is_ok() {
+            return Ok(true);
+        }
+
+        if binstall_ok {
+            logger.info(
+                "cargo-binstall 已结束，但 otunnel 后置验证未通过；将回退到 Cargo 源码安装。"
+                    .to_string(),
+            );
+        } else {
+            logger.info(
+                "cargo-binstall 安装失败（包括 GitHub API 403/429、Release 解析或网络超时等情况），将自动回退到 Cargo 源码安装。"
+                    .to_string(),
+            );
+        }
+    } else {
+        logger.info(
+            "未检测到 cargo-binstall，将通过 Cargo 源码编译 otunnel；此过程可能需要较长时间。"
+                .to_string(),
+        );
+    }
+
+    if !cargo_available {
+        return Err("cargo-binstall 未能完成 otunnel 安装，且当前找不到 Cargo，无法执行源码安装回退".to_string());
+    }
+
+    Ok(run_logged(
+        logger,
+        "cargo",
+        &["install", "otunnel", "--locked"],
+    ))
+}
+
 fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, String> {
     let logger = InstallLogger {
         app,
@@ -428,18 +499,7 @@ fn install_component_blocking(app: AppHandle, item_id: String) -> Result<bool, S
             logger.info("cargo-binstall 需要编译时会耗时较长；控制台将持续显示 Cargo 真实输出与静默阶段心跳。".to_string());
             run_logged(&logger, "cargo", &["install", "cargo-binstall", "--locked"])
         }
-        "otunnel" => {
-            if find_executable("cargo-binstall").is_some() {
-                logger.info("检测到 cargo-binstall，优先使用预编译二进制安装 otunnel。".to_string());
-                run_logged(&logger, "cargo-binstall", &["otunnel", "-y"])
-            } else {
-                if find_executable("cargo").is_none() {
-                    return Err("安装 otunnel 前必须先安装 Cargo 或 cargo-binstall".to_string());
-                }
-                logger.info("未检测到 cargo-binstall，将通过 Cargo 源码编译 otunnel；此过程可能需要较长时间。".to_string());
-                run_logged(&logger, "cargo", &["install", "otunnel", "--locked"])
-            }
-        }
+        "otunnel" => install_otunnel(&logger)?,
         "pi" => {
             if find_executable("npm").is_none() {
                 return Err("安装 Pi 前必须先安装 npm".to_string());
