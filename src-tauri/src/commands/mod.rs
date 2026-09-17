@@ -1,4 +1,5 @@
 pub mod env;
+pub mod install;
 pub mod otunnel;
 pub mod workspace;
 pub mod history;
