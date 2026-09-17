@@ -14,7 +14,7 @@ export async function checkEnvironment(): Promise<EnvCheckItem[]> {
 }
 
 export async function installComponent(itemId: string): Promise<boolean> {
-  const ok = await invoke<boolean>("install_component", { itemId });
+  const ok = await invoke<boolean>("install_component_v2", { itemId });
   if (!ok) {
     throw new Error(`组件 ${itemId} 安装后未通过可用性验证`);
   }
