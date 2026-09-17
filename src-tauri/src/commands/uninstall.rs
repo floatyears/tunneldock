@@ -27,8 +27,6 @@ struct UninstallLogger {
 
 impl UninstallLogger {
     fn emit(&self, stage: &str, line: impl Into<String>, is_error: bool) {
-        // Reuse the existing component-operation stream so the terminal drawer does
-        // not need a second event listener just for uninstall operations.
         let _ = self.app.emit(
             "install-log",
             InstallProgressEvent {
@@ -104,10 +102,10 @@ fn path_is_under(path: &Path, root: &Path) -> bool {
 }
 
 fn cargo_bin_dir() -> Option<PathBuf> {
-    if let Some(cargo_home) = env::var_os("CARGO_HOME") {
-        return Some(PathBuf::from(cargo_home).join("bin"));
-    }
-    dirs::home_dir().map(|home| home.join(".cargo").join("bin"))
+    env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .map(|home| home.join("bin"))
+        .or_else(|| dirs::home_dir().map(|home| home.join(".cargo").join("bin")))
 }
 
 fn remove_known_cargo_binary(
@@ -135,7 +133,7 @@ fn remove_known_cargo_binary(
     }
 
     logger.info(format!(
-        "Cargo 元数据卸载未清除二进制，安全删除 Cargo bin 中的文件: {}",
+        "Cargo 卸载记录未清除二进制，安全删除 Cargo bin 中的文件: {}",
         resolved_path.display()
     ));
     fs::remove_file(&resolved_path)
@@ -144,11 +142,8 @@ fn remove_known_cargo_binary(
 }
 
 fn brew_manages(formula: &str) -> bool {
-    if find_executable("brew").is_none() {
-        return false;
-    }
-    let out = execute_cmd("brew", &["list", "--versions", formula], None);
-    out.success && !out.stdout.trim().is_empty()
+    find_executable("brew").is_some()
+        && execute_cmd("brew", &["list", "--versions", formula], None).success
 }
 
 #[cfg(target_os = "windows")]
@@ -161,8 +156,8 @@ fn active_nvm_node_version() -> Option<String> {
     if !path_is_under(&node, &nvm_symlink) {
         return None;
     }
-
-    command_text("node", &["-v"]).map(|version| version.trim().trim_start_matches('v').to_string())
+    command_text("node", &["-v"])
+        .map(|version| version.trim().trim_start_matches('v').to_string())
 }
 
 fn uninstall_node_runtime(logger: &UninstallLogger) -> Result<bool, String> {
@@ -176,7 +171,7 @@ fn uninstall_node_runtime(logger: &UninstallLogger) -> Result<bool, String> {
             return Ok(run_logged(logger, "nvm", &["uninstall", &version]));
         }
 
-        logger.info("通过 winget 卸载 Node.js；npm 与 Node.js 属于同一运行时包，将一并移除。".to_string());
+        logger.info("通过 winget 卸载 Node.js；npm 会随同一运行时包一起移除。".to_string());
         return Ok(run_logged(
             logger,
             "winget",
@@ -194,14 +189,9 @@ fn uninstall_node_runtime(logger: &UninstallLogger) -> Result<bool, String> {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     {
         if brew_manages("node") {
-            logger.info("检测到 Homebrew 管理的 Node.js，将通过 brew uninstall node 卸载。".to_string());
             return Ok(run_logged(logger, "brew", &["uninstall", "node"]));
         }
-
-        Err(
-            "当前 Node.js 不是 TunnelDock 可安全识别的 Homebrew/nvm-windows 安装。为避免删除系统包，请使用原安装来源卸载。"
-                .to_string(),
-        )
+        Err("当前 Node.js 不是 TunnelDock 可安全识别的 Homebrew 安装；为避免删除系统包，请使用原安装来源卸载。".to_string())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -232,10 +222,7 @@ fn uninstall_git(logger: &UninstallLogger) -> Result<bool, String> {
         if brew_manages("git") {
             return Ok(run_logged(logger, "brew", &["uninstall", "git"]));
         }
-        Err(
-            "当前 Git 不是 Homebrew 管理的用户级安装。系统 Git/发行版 Git 不应由桌面应用静默删除，请使用原包管理器卸载。"
-                .to_string(),
-        )
+        Err("当前 Git 不是 Homebrew 管理的用户级安装。系统 Git/发行版 Git 不应由桌面应用静默删除，请使用原包管理器卸载。".to_string())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -274,10 +261,7 @@ fn uninstall_rust(logger: &UninstallLogger) -> Result<bool, String> {
         if brew_manages("rust") {
             return Ok(run_logged(logger, "brew", &["uninstall", "rust"]));
         }
-        Err(
-            "当前 Rust/Cargo 不是 rustup 或 Homebrew 管理的安装；请使用原发行版包管理器卸载。"
-                .to_string(),
-        )
+        Err("当前 Rust/Cargo 不是 rustup 或 Homebrew 管理的安装；请使用原发行版包管理器卸载。".to_string())
     }
 
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -296,7 +280,7 @@ fn uninstall_cargo_package(
         command_ok = run_logged(logger, "cargo", &["uninstall", package]);
         refresh_process_path();
         if find_executable(executable).is_none() {
-            return Ok(command_ok);
+            return Ok(true);
         }
     } else {
         logger.info(format!(
@@ -326,7 +310,7 @@ fn uninstall_chappie(logger: &UninstallLogger) -> Result<bool, String> {
         if ok {
             return Ok(true);
         }
-        logger.info("Pi 卸载命令失败，将检查是否仍有本地 Chappie 包目录。".to_string());
+        logger.info("Pi 卸载扩展命令失败，将检查受控的 Chappie 本地包目录。".to_string());
     }
 
     let Some(package_dir) = chappie_package_dir() else {
@@ -336,8 +320,6 @@ fn uninstall_chappie(logger: &UninstallLogger) -> Result<bool, String> {
         return Ok(true);
     }
 
-    // This fallback is deliberately limited to Pi's exact managed package path.
-    // Never recursively delete a parent such as ~/.pi/agent/npm/node_modules.
     logger.info(format!(
         "删除 Pi 管理目录中的 Chappie 包: {}",
         package_dir.display()
@@ -375,10 +357,7 @@ fn uninstall_tunnel_key(state: &Arc<AppState>, logger: &UninstallLogger) -> Resu
             .map_err(|err| format!("删除 {} 失败: {}", key_file.display(), err))?;
     }
 
-    {
-        let mut settings = state.settings.lock();
-        settings.api_key.clear();
-    }
+    state.settings.lock().api_key.clear();
     state.save_settings();
     Ok(true)
 }
@@ -387,19 +366,11 @@ fn uninstall_tunnel_config(
     state: &Arc<AppState>,
     logger: &UninstallLogger,
 ) -> Result<bool, String> {
-    let existing: Vec<PathBuf> = chappie_yaml_paths()
-        .into_iter()
-        .filter(|path| path.exists())
-        .collect();
-    for path in &existing {
+    for path in chappie_yaml_paths().into_iter().filter(|path| path.exists()) {
         logger.info(format!("删除 Tunnel Profile: {}", path.display()));
     }
     remove_chappie_yaml_files().map_err(|err| format!("删除 Tunnel Profile 失败: {}", err))?;
-
-    {
-        let mut settings = state.settings.lock();
-        settings.tunnel_id.clear();
-    }
+    state.settings.lock().tunnel_id.clear();
     state.save_settings();
     Ok(true)
 }
@@ -440,14 +411,11 @@ fn stop_workspace_processes(state: &Arc<AppState>, logger: &UninstallLogger) {
 }
 
 fn prepare_for_uninstall(item_id: &str, state: &Arc<AppState>, logger: &UninstallLogger) {
-    match item_id {
-        "node" | "npm" | "pi" | "chappie" => stop_workspace_processes(state, logger),
-        _ => {}
+    if matches!(item_id, "node" | "npm" | "pi" | "chappie") {
+        stop_workspace_processes(state, logger);
     }
-
-    match item_id {
-        "otunnel" | "tunnel_key" | "tunnel_config" => stop_otunnel_process(state, logger),
-        _ => {}
+    if matches!(item_id, "cargo" | "otunnel" | "tunnel_key" | "tunnel_config") {
+        stop_otunnel_process(state, logger);
     }
 }
 
@@ -468,9 +436,10 @@ fn verify_chappie_absent() -> Result<String, String> {
     };
 
     if package_dir_exists || listed {
-        return Err("仍检测到 @zetaloop/chappie 扩展或其 Pi 管理目录".to_string());
+        Err("仍检测到 @zetaloop/chappie 扩展或其 Pi 管理目录".to_string())
+    } else {
+        Ok("Chappie 扩展已卸载".to_string())
     }
-    Ok("Chappie 扩展已卸载".to_string())
 }
 
 fn verify_removed(item_id: &str, state: &Arc<AppState>) -> Result<String, String> {
@@ -489,8 +458,7 @@ fn verify_removed(item_id: &str, state: &Arc<AppState>) -> Result<String, String
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join(".chappie")
                 .join("tunnelkey.txt");
-            let key_in_memory = !state.settings.lock().api_key.trim().is_empty();
-            if key_file.exists() || key_in_memory {
+            if key_file.exists() || !state.settings.lock().api_key.trim().is_empty() {
                 Err("Tunnel API Key 文件或应用设置中仍存在密钥".to_string())
             } else {
                 Ok("Tunnel API Key 已清除".to_string())
@@ -498,8 +466,7 @@ fn verify_removed(item_id: &str, state: &Arc<AppState>) -> Result<String, String
         }
         "tunnel_config" => {
             let config_exists = chappie_yaml_paths().into_iter().any(|path| path.exists());
-            let tunnel_id_in_memory = !state.settings.lock().tunnel_id.trim().is_empty();
-            if config_exists || tunnel_id_in_memory {
+            if config_exists || !state.settings.lock().tunnel_id.trim().is_empty() {
                 Err("仍检测到 chappie.yaml 或应用设置中的 Tunnel ID".to_string())
             } else {
                 Ok("Tunnel Profile 已清除".to_string())
@@ -536,12 +503,10 @@ fn uninstall_component_blocking(
         }
         "git" => uninstall_git(&logger)?,
         "cargo" => {
-            logger.info("卸载 Rust/Cargo 会同时移除该 Cargo Home 中的 cargo-binstall、otunnel 等 Cargo 二进制。".to_string());
+            logger.info("卸载 Rust/Cargo 会同时影响该 Cargo Home 中的 cargo-binstall、otunnel 等 Cargo 二进制。".to_string());
             uninstall_rust(&logger)?
         }
-        "cargo_binstall" => {
-            uninstall_cargo_package(&logger, "cargo-binstall", "cargo-binstall")?
-        }
+        "cargo_binstall" => uninstall_cargo_package(&logger, "cargo-binstall", "cargo-binstall")?,
         "otunnel" => uninstall_cargo_package(&logger, "otunnel", "otunnel")?,
         "pi" => uninstall_pi(&logger)?,
         "chappie" => uninstall_chappie(&logger)?,
@@ -576,8 +541,8 @@ pub async fn uninstall_component(
     state: State<'_, Arc<AppState>>,
     item_id: String,
 ) -> Result<bool, String> {
-    // Serialize destructive removals so multiple cards cannot mutate the same
-    // package manager / runtime state concurrently.
+    // Serialize destructive removals so repeated clicks cannot mutate the same
+    // package-manager/toolchain state concurrently.
     let _guard = uninstall_lock().lock().await;
 
     let state = state.inner().clone();
