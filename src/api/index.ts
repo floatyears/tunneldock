@@ -122,6 +122,10 @@ export async function updateSettings(
   return await invoke<TunnelSettings>("update_settings", { newSettings });
 }
 
+export async function refreshProcessEnvironment(): Promise<boolean> {
+  return await invoke<boolean>("refresh_process_environment");
+}
+
 export async function openPathInExplorer(path: string): Promise<boolean> {
   return await invoke<boolean>("open_path_in_explorer", { path });
 }
