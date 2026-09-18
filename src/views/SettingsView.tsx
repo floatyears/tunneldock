@@ -36,7 +36,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [tunnelId, setTunnelId] = useState(settings?.tunnel_id || "");
   const [apiKey, setApiKey] = useState(settings?.api_key || "");
   const [healthPort, setHealthPort] = useState<number>(
-    settings?.health_port || 8080
+    settings?.health_port ?? 0
   );
   const [saving, setSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
@@ -53,6 +53,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleSave = async () => {
     if (!tunnelId.trim() || !apiKey.trim()) {
       setErrorMessage("Tunnel ID 和 API Key 均为必填项");
+      return;
+    }
+    if (!Number.isInteger(healthPort) || healthPort < 0 || healthPort > 65535) {
+      setErrorMessage("健康检查端口必须是 0 到 65535 之间的整数；0 表示自动分配");
       return;
     }
 
@@ -188,12 +192,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               </label>
               <input
                 type="number"
+                min={0}
+                max={65535}
+                step={1}
                 value={healthPort}
-                onChange={(e) => setHealthPort(Number(e.target.value) || 8080)}
+                onChange={(e) => setHealthPort(Number(e.target.value))}
                 className="w-full bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-xs font-mono text-zinc-100 focus:outline-none focus:border-zinc-600"
               />
               <p className="text-[11px] text-zinc-500">
-                默认 8080。本地守护进程将在 127.0.0.1:8080 暴露 /healthz 探针。
+                推荐填写 0，由系统在每次启动时自动分配空闲端口；启动后会显示实际端口。只有外部工具依赖固定地址时才填写固定端口。
               </p>
             </div>
 

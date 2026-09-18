@@ -24,7 +24,9 @@ export const Header: React.FC<HeaderProps> = ({
   updateState,
   onOpenUpdater,
 }) => {
-  const isOnline = otunnelStatus?.running && otunnelStatus?.healthz_ok;
+  const isRunning = Boolean(otunnelStatus?.running);
+  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok);
+  const latencyMs = otunnelStatus?.latency_ms;
 
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-dark-card/90 backdrop-blur px-6 flex items-center justify-between select-none">
@@ -102,14 +104,18 @@ export const Header: React.FC<HeaderProps> = ({
           <span className="text-zinc-400">Tunnel:</span>
           <span
             className={
-              isOnline ? "text-emerald-400 font-medium" : "text-zinc-500"
+              isOnline
+                ? "text-emerald-400 font-medium"
+                : isRunning
+                ? "text-amber-400 font-medium"
+                : "text-zinc-500"
             }
           >
-            {isOnline ? "已连接" : "已断开"}
+            {isOnline ? "已连接" : isRunning ? "运行异常" : "已断开"}
           </span>
-          {isOnline && otunnelStatus?.latency_ms !== null && (
+          {isOnline && latencyMs != null && (
             <span className="text-zinc-500 text-[11px]">
-              ({otunnelStatus.latency_ms}ms)
+              ({latencyMs}ms)
             </span>
           )}
         </div>
@@ -144,13 +150,13 @@ export const Header: React.FC<HeaderProps> = ({
           onClick={onToggleOtunnel}
           disabled={isTogglingOtunnel}
           className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium border transition-all ${
-            isOnline
+            isRunning
               ? "bg-rose-950/30 text-rose-300 border-rose-800/60 hover:bg-rose-900/40"
               : "bg-emerald-950/30 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900/40"
           } disabled:opacity-50`}
         >
           <Power className="w-3.5 h-3.5" />
-          <span>{isOnline ? "停止 Tunnel" : "启动 Tunnel"}</span>
+          <span>{isRunning ? "停止 Tunnel" : "启动 Tunnel"}</span>
         </button>
       </div>
     </header>

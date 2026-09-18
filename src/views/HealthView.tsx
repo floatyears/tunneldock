@@ -36,13 +36,20 @@ export const HealthView: React.FC<HealthViewProps> = ({
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const isOnline = otunnelStatus?.running && otunnelStatus?.healthz_ok;
+  const isRunning = Boolean(otunnelStatus?.running);
+  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok);
+  const healthAddress = otunnelStatus?.health_base_url
+    ? otunnelStatus.health_base_url.replace(/^https?:\/\//, "")
+    : "自动分配（启动后显示）";
+  const healthModeDescription = otunnelStatus?.listen_port
+    ? `当前健康检查地址为 127.0.0.1:${otunnelStatus.listen_port}`
+    : "健康检查端口由系统自动分配，启动后会显示实际地址";
 
   const handleToggleDaemon = async () => {
     try {
       setActionLoading(true);
       setActionError(null);
-      if (isOnline) {
+      if (isRunning) {
         await stopOtunnel();
       } else {
         await startOtunnel();
@@ -140,11 +147,15 @@ export const HealthView: React.FC<HealthViewProps> = ({
                   : "bg-zinc-900 text-zinc-500 border-zinc-800"
               }`}
             >
-              {isOnline ? "隧道正常运行中" : "守护进程未启动"}
+              {isOnline
+                ? "隧道正常运行中"
+                : isRunning
+                ? "守护进程运行异常"
+                : "守护进程未启动"}
             </span>
           </div>
           <p className="text-xs text-zinc-400 max-w-xl">
-            实时轮询本地 127.0.0.1:8080 端口探针 (/healthz 与 /readyz) 及 OpenAI 云端控制面网络连通性。支持运行 otunnel doctor 执行 8 项深度指标全检。
+            {healthModeDescription}。TunnelDock 会轮询 /healthz 与 /readyz，同时检测 OpenAI 云端控制面连通性。
           </p>
         </div>
 
@@ -196,10 +207,12 @@ export const HealthView: React.FC<HealthViewProps> = ({
               className={`text-[10px] font-mono px-2 py-0.5 rounded border ${
                 isOnline
                   ? "bg-emerald-950/40 text-emerald-400 border-emerald-800/60"
+                  : isRunning
+                  ? "bg-amber-950/40 text-amber-400 border-amber-800/60"
                   : "bg-zinc-900 text-zinc-500 border-zinc-800"
               }`}
             >
-              {isOnline ? "RUNNING" : "STOPPED"}
+              {isOnline ? "RUNNING" : isRunning ? "UNHEALTHY" : "STOPPED"}
             </span>
           </div>
 
@@ -211,13 +224,15 @@ export const HealthView: React.FC<HealthViewProps> = ({
             <div className="flex items-center justify-between">
               <span className="text-zinc-500">探针端口:</span>
               <span className="text-zinc-200">
-                127.0.0.1:{otunnelStatus?.listen_port || 8080}
+                {otunnelStatus?.listen_port
+                  ? `127.0.0.1:${otunnelStatus.listen_port}`
+                  : "自动分配（尚未启动）"}
               </span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-zinc-500">健康探测延时:</span>
               <span className="text-zinc-200">
-                {otunnelStatus?.latency_ms !== null
+                {otunnelStatus?.latency_ms != null
                   ? `${otunnelStatus?.latency_ms} ms`
                   : "—"}
               </span>
@@ -229,15 +244,15 @@ export const HealthView: React.FC<HealthViewProps> = ({
               onClick={handleToggleDaemon}
               disabled={actionLoading}
               className={`flex-1 py-1.5 rounded text-xs font-medium border flex items-center justify-center gap-1.5 transition-colors ${
-                isOnline
+                isRunning
                   ? "bg-rose-950/30 text-rose-300 border-rose-800/60 hover:bg-rose-900/40"
                   : "bg-emerald-950/30 text-emerald-300 border-emerald-800/60 hover:bg-emerald-900/40"
               } disabled:opacity-50`}
             >
               <Power className="w-3.5 h-3.5" />
-              <span>{isOnline ? "停止守护进程" : "启动守护进程"}</span>
+              <span>{isRunning ? "停止守护进程" : "启动守护进程"}</span>
             </button>
-            {isOnline && (
+            {isRunning && (
               <button
                 onClick={handleRestartDaemon}
                 disabled={actionLoading}
@@ -258,7 +273,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
               <span>HTTP 探针端点状态</span>
             </div>
             <span className="text-[10px] font-mono text-zinc-500">
-              127.0.0.1:8080
+              {healthAddress}
             </span>
           </div>
 

@@ -148,7 +148,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <ExternalLink className="w-3 h-3 text-zinc-500" />
             </a>
             <span className="font-mono text-zinc-500 text-[10px]">
-              :8080
+              {settings?.health_port
+                ? `:${settings.health_port}`
+                : "端口: 自动"}
             </span>
           </div>
         </div>

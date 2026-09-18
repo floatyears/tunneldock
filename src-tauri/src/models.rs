@@ -44,7 +44,8 @@ pub struct OtunnelDaemonStatus {
     pub healthz_ok: bool,
     pub readyz_ok: bool,
     pub latency_ms: Option<u64>,
-    pub listen_port: u16,
+    pub listen_port: Option<u16>,
+    pub health_base_url: Option<String>,
     pub tunnel_id: Option<String>,
     pub uptime_seconds: Option<u64>,
 }

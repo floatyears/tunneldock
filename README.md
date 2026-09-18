@@ -118,7 +118,7 @@ npm run tauri build
 | 路径 | 用途 |
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
-| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认端口 `8080`）、MCP 目标（`pi --chappie`） |
+| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（`pi --chappie`） |
 | 系统数据目录下的 `TunnelDock/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。

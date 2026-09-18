@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
-use tauri::{AppHandle, Emitter};
+use std::sync::Arc;
+use tauri::{AppHandle, Emitter, State};
 use crate::models::{EnvCheckItem, InstallProgressEvent, TunnelSettings};
+use crate::state::AppState;
 use crate::utils::cmd::{execute_cmd, find_executable, run_streaming};
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_chappie_yaml};
 
@@ -509,13 +511,14 @@ pub async fn install_component(app: AppHandle, item_id: String) -> Result<bool, 
 
 #[tauri::command]
 pub async fn save_tunnel_credentials(
+    state: State<'_, Arc<AppState>>,
     tunnel_id: String,
     api_key: String,
     health_port: Option<u16>,
 ) -> Result<TunnelSettings, String> {
     let clean_key = api_key.trim().to_string();
     let clean_id = tunnel_id.trim().to_string();
-    let port = health_port.unwrap_or(8080);
+    let port = health_port.unwrap_or(0);
 
     if clean_key.is_empty() || clean_id.is_empty() {
         return Err("Tunnel ID 和 API Key 均不能为空".to_string());
@@ -553,11 +556,16 @@ mcp:
 
     sync_chappie_yaml(&yaml_content).map_err(|e| format!("写入 chappie.yaml 失败: {}", e))?;
 
-    Ok(TunnelSettings {
+    let new_settings = TunnelSettings {
         tunnel_id: clean_id,
         api_key: clean_key,
         key_file_path: key_file_str,
         health_port: port,
         profile_name: "chappie".to_string(),
-    })
+    };
+
+    *state.settings.lock() = new_settings.clone();
+    state.save_settings();
+
+    Ok(new_settings)
 }

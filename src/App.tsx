@@ -45,6 +45,9 @@ export const App: React.FC = () => {
     null
   );
   const [isTogglingOtunnel, setIsTogglingOtunnel] = useState(false);
+  const [tunnelActionError, setTunnelActionError] = useState<string | null>(
+    null
+  );
 
   const [history, setHistory] = useState<McpCallRecord[]>([]);
   const [settings, setSettings] = useState<TunnelSettings | null>(null);
@@ -188,18 +191,20 @@ export const App: React.FC = () => {
 
   // Header Toggle Otunnel
   const handleToggleOtunnel = async () => {
-    const isOnline = otunnelStatus?.running && otunnelStatus?.healthz_ok;
+    const isRunning = Boolean(otunnelStatus?.running);
     try {
       setIsTogglingOtunnel(true);
-      if (isOnline) {
+      setTunnelActionError(null);
+      if (isRunning) {
         await stopOtunnel();
       } else {
         await startOtunnel();
       }
-      await loadOtunnelStatus();
     } catch (err) {
       console.error(err);
+      setTunnelActionError(String(err));
     } finally {
+      await loadOtunnelStatus();
       setIsTogglingOtunnel(false);
     }
   };
@@ -236,6 +241,27 @@ export const App: React.FC = () => {
         updateState={updater.state}
         onOpenUpdater={updater.openDialog}
       />
+
+      {tunnelActionError && (
+        <div
+          role="alert"
+          className="mx-4 mt-3 p-3 rounded-lg bg-rose-950/50 border border-rose-800/70 text-xs text-rose-200 flex items-start justify-between gap-4 shadow-lg"
+        >
+          <div className="space-y-1 min-w-0">
+            <div className="font-semibold">Tunnel 操作失败</div>
+            <pre className="font-mono text-[11px] text-rose-300 whitespace-pre-wrap break-words leading-relaxed select-text">
+              {tunnelActionError}
+            </pre>
+          </div>
+          <button
+            type="button"
+            onClick={() => setTunnelActionError(null)}
+            className="shrink-0 px-2 py-1 rounded border border-rose-700/60 bg-rose-900/40 text-rose-300 hover:text-rose-100"
+          >
+            关闭
+          </button>
+        </div>
+      )}
 
       {/* Main Workspace Frame */}
       <div className="flex-1 flex overflow-hidden">

@@ -39,7 +39,8 @@ export interface OtunnelDaemonStatus {
   healthz_ok: boolean;
   readyz_ok: boolean;
   latency_ms: number | null;
-  listen_port: number;
+  listen_port: number | null;
+  health_base_url: string | null;
   tunnel_id: string | null;
   uptime_seconds: number | null;
 }
