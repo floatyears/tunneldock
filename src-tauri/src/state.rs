@@ -9,6 +9,7 @@ use parking_lot::Mutex;
 use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
 use crate::utils::cmd::kill_process_tree;
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
+use crate::utils::time::normalize_timestamp_to_local;
 
 const APP_DATA_DIR_NAME: &str = "TunnelDock";
 const LEGACY_APP_DATA_DIR_NAMES: [&str; 2] = ["local-mcp-console", "chappie-desktop"];
@@ -198,10 +199,25 @@ impl AppState {
         let file = data_dir.join("history.json");
         if let Ok(content) = fs::read_to_string(&file) {
             if let Ok(list) = serde_json::from_str::<Vec<McpCallRecord>>(&content) {
-                return list;
+                let history = Self::sanitize_history(list);
+                if let Ok(json) = serde_json::to_string_pretty(&history) {
+                    let _ = fs::write(&file, json);
+                }
+                return history;
             }
         }
         Vec::new()
+    }
+
+    fn sanitize_history(history: Vec<McpCallRecord>) -> Vec<McpCallRecord> {
+        history
+            .into_iter()
+            .filter(|record| record.id != "init_sample_1" && record.id != "sessions_sample_2")
+            .map(|mut record| {
+                record.timestamp = normalize_timestamp_to_local(&record.timestamp);
+                record
+            })
+            .collect()
     }
 
     pub fn save_history(&self) {
@@ -222,6 +238,8 @@ impl Drop for AppState {
 #[cfg(test)]
 mod tests {
     use super::AppState;
+    use crate::models::McpCallRecord;
+    use crate::utils::time::normalize_timestamp_to_local;
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -258,5 +276,55 @@ mod tests {
             );
             fs::remove_dir_all(base_dir).expect("test data should be removed");
         }
+    }
+
+    #[test]
+    fn removes_only_the_two_legacy_demo_history_records() {
+        let records: Vec<McpCallRecord> = serde_json::from_str(
+            r#"[
+                {"id":"init_sample_1","timestamp":"x","session_id":null,"workspace_name":"系统初始化","tool_name":"init","args_json":"{}","result_summary":"demo","status":"success","duration_ms":45},
+                {"id":"sessions_sample_2","timestamp":"x","session_id":null,"workspace_name":"MCP Broker","tool_name":"sessions","args_json":"{}","result_summary":"demo","status":"success","duration_ms":18},
+                {"id":"real-call","timestamp":"x","session_id":"s1","workspace_name":"hola","tool_name":"read","args_json":"{}","result_summary":"ok","status":"success","duration_ms":3}
+            ]"#,
+        )
+        .expect("fixture should deserialize");
+
+        let sanitized = AppState::sanitize_history(records);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].id, "real-call");
+    }
+
+    #[test]
+    fn migrates_legacy_history_timestamps_and_persists_the_local_offset() {
+        let data_dir = temporary_data_root("history-timezone");
+        fs::create_dir_all(&data_dir).expect("test data directory should be created");
+        fs::write(
+            data_dir.join("history.json"),
+            r#"[{
+                "id":"legacy-call",
+                "timestamp":"2026-09-18 03:04:04",
+                "session_id":null,
+                "workspace_name":"hola",
+                "tool_name":"read",
+                "args_json":"{}",
+                "result_summary":"ok",
+                "status":"success",
+                "duration_ms":10
+            }]"#,
+        )
+        .expect("legacy history should be written");
+
+        let history = AppState::load_history(&data_dir);
+        let expected = normalize_timestamp_to_local("2026-09-18 03:04:04");
+        let persisted: Vec<McpCallRecord> = serde_json::from_str(
+            &fs::read_to_string(data_dir.join("history.json"))
+                .expect("migrated history should be readable"),
+        )
+        .expect("migrated history should remain valid JSON");
+
+        assert_eq!(history[0].timestamp, expected);
+        assert_eq!(persisted[0].timestamp, expected);
+        fs::remove_dir_all(data_dir).expect("test data should be removed");
     }
 }

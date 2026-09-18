@@ -145,3 +145,9 @@ export async function openPathInExplorer(path: string): Promise<boolean> {
 export async function getAppVersion(): Promise<string> {
   return await invoke<string>("get_app_version");
 }
+
+export async function resolveCloseRequest(
+  action: "exit" | "hide" | "cancel"
+): Promise<void> {
+  await invoke("resolve_close_request", { action });
+}

@@ -3,6 +3,10 @@ import { listen } from "@tauri-apps/api/event";
 import { Header } from "./components/Header";
 import { TitleBar } from "./components/TitleBar";
 import { UpdateDialog } from "./components/UpdateDialog";
+import {
+  CloseAction,
+  CloseConfirmDialog,
+} from "./components/CloseConfirmDialog";
 import { Sidebar, NavTab } from "./components/Sidebar";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { EnvironmentView } from "./views/EnvironmentView";
@@ -28,11 +32,15 @@ import {
   startOtunnel,
   stopOtunnel,
   refreshProcessEnvironment,
+  resolveCloseRequest,
 } from "./api";
 
 export const App: React.FC = () => {
   const [currentTab, setCurrentTab] = useState<NavTab>("env");
   const updater = useAppUpdater();
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [closeDialogBusy, setCloseDialogBusy] = useState(false);
+  const [closeDialogError, setCloseDialogError] = useState<string | null>(null);
 
   // Core States
   const [envItems, setEnvItems] = useState<EnvCheckItem[]>([]);
@@ -138,6 +146,31 @@ export const App: React.FC = () => {
     refreshAll();
   }, [refreshAll]);
 
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+
+    listen("app-close-requested", () => {
+      setCloseDialogError(null);
+      setCloseDialogOpen(true);
+    })
+      .then((stopListening) => {
+        if (disposed) {
+          stopListening();
+        } else {
+          unlisten = stopListening;
+        }
+      })
+      .catch((error) => {
+        console.warn("Close request listener registration failed:", error);
+      });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   // Periodic health polling
   useEffect(() => {
     const timer = setInterval(() => {
@@ -150,6 +183,7 @@ export const App: React.FC = () => {
   useEffect(() => {
     let unlistenInstall: (() => void) | undefined;
     let unlistenWs: (() => void) | undefined;
+    let unlistenAudit: (() => void) | undefined;
 
     const setupListeners = async () => {
       try {
@@ -173,6 +207,10 @@ export const App: React.FC = () => {
             { line: event.payload.line, is_error: event.payload.is_error },
           ]);
         });
+
+        unlistenAudit = await listen("audit-updated", () => {
+          void loadHistoryData();
+        });
       } catch (e) {
         console.warn("Tauri event listener registration skipped or failed:", e);
       }
@@ -183,8 +221,9 @@ export const App: React.FC = () => {
     return () => {
       if (unlistenInstall) unlistenInstall();
       if (unlistenWs) unlistenWs();
+      if (unlistenAudit) unlistenAudit();
     };
-  }, []);
+  }, [loadHistoryData]);
 
   // Header Toggle Otunnel
   const handleToggleOtunnel = async () => {
@@ -203,6 +242,26 @@ export const App: React.FC = () => {
       setIsTogglingOtunnel(false);
     }
   };
+
+  const handleCloseResolve = useCallback(
+    async (action: CloseAction) => {
+      if (closeDialogBusy) return;
+
+      setCloseDialogBusy(true);
+      setCloseDialogError(null);
+      try {
+        await resolveCloseRequest(action);
+        setCloseDialogOpen(false);
+      } catch (error) {
+        setCloseDialogError(
+          error instanceof Error ? error.message : String(error)
+        );
+      } finally {
+        setCloseDialogBusy(false);
+      }
+    },
+    [closeDialogBusy]
+  );
 
   const handleOpenTerminalForWs = (_workspaceId: string, title: string) => {
     setTerminalTitle(title);
@@ -285,6 +344,7 @@ export const App: React.FC = () => {
           {currentTab === "history" && (
             <HistoryView
               history={history}
+              workspaces={workspaces}
               onRefresh={loadHistoryData}
             />
           )}
@@ -316,6 +376,13 @@ export const App: React.FC = () => {
         onClose={updater.closeDialog}
         onCheck={() => updater.checkForUpdates(true)}
         onInstall={updater.downloadAndInstall}
+      />
+
+      <CloseConfirmDialog
+        open={closeDialogOpen}
+        busy={closeDialogBusy}
+        error={closeDialogError}
+        onResolve={handleCloseResolve}
       />
     </div>
   );

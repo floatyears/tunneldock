@@ -1,23 +1,29 @@
+mod audit;
 pub mod models;
 pub mod state;
+mod tray;
 pub mod utils;
 pub mod commands;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use state::AppState;
-use tauri::Manager;
+use tauri::{Manager, WindowEvent};
 
 pub fn run() {
     let app_state = Arc::new(AppState::new());
     let state_exit = app_state.clone();
     let exit_cleanup_started = Arc::new(AtomicBool::new(false));
     let exit_cleanup_flag = exit_cleanup_started.clone();
+    let close_lifecycle = Arc::new(tray::CloseLifecycle::default());
+    let setup_lifecycle = close_lifecycle.clone();
+    let window_lifecycle = close_lifecycle.clone();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .manage(close_lifecycle)
         .setup(|app| {
             #[cfg(desktop)]
             app.handle()
@@ -28,7 +34,15 @@ pub fn run() {
                     let _ = window.set_icon(icon.clone());
                 }
             }
+            tray::setup(app, setup_lifecycle)?;
             Ok(())
+        })
+        .on_window_event(move |window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    tray::handle_close_requested(window, api, window_lifecycle.clone());
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             // Environment
@@ -61,6 +75,8 @@ pub fn run() {
             commands::settings::refresh_process_environment,
             commands::settings::open_path_in_explorer,
             commands::settings::get_app_version,
+            // Application lifecycle
+            tray::resolve_close_request,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
