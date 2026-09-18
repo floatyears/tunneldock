@@ -1,15 +1,91 @@
+use crate::audit::{parse_rpc_audit_event, RpcAuditEvent};
+use crate::models::{McpCallRecord, WorkspaceItem};
+use crate::state::AppState;
+use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
+use crate::utils::time::local_now_rfc3339;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
-use crate::models::WorkspaceItem;
-use crate::state::AppState;
-use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct PendingToolCall {
+    record_id: String,
+    started_at: Instant,
+}
+
+fn insert_running_call(
+    state: &AppState,
+    workspace_id: &str,
+    workspace_name: &str,
+    call_id: &str,
+    tool_name: String,
+    args_json: String,
+    input_tokens: u64,
+) -> String {
+    let now = chrono::Local::now();
+    let record_id = format!(
+        "{}:{}:{}",
+        workspace_id,
+        call_id,
+        now.timestamp_nanos_opt().unwrap_or_default()
+    );
+    let session_id = state
+        .workspaces
+        .lock()
+        .iter()
+        .find(|workspace| workspace.id == workspace_id)
+        .and_then(|workspace| workspace.session_id.clone());
+    let record = McpCallRecord {
+        id: record_id.clone(),
+        timestamp: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, false),
+        session_id,
+        workspace_id: Some(workspace_id.to_string()),
+        workspace_name: Some(workspace_name.to_string()),
+        tool_name,
+        args_json,
+        result_summary: String::new(),
+        status: "executing".to_string(),
+        duration_ms: 0,
+        input_tokens,
+        output_tokens: 0,
+        total_tokens: input_tokens,
+    };
+
+    state.history.lock().insert(0, record);
+    state.save_history();
+    record_id
+}
+
+fn finish_running_call(
+    state: &AppState,
+    pending: PendingToolCall,
+    result_summary: String,
+    is_error: bool,
+    output_tokens: u64,
+) {
+    {
+        let mut history = state.history.lock();
+        let Some(record) = history
+            .iter_mut()
+            .find(|record| record.id == pending.record_id)
+        else {
+            return;
+        };
+        record.result_summary = result_summary;
+        record.status = if is_error { "error" } else { "success" }.to_string();
+        record.duration_ms = pending.started_at.elapsed().as_millis() as u64;
+        record.output_tokens = output_tokens;
+        record.total_tokens = record.input_tokens.saturating_add(output_tokens);
+    }
+    state.save_history();
+}
 
 #[tauri::command]
 pub async fn list_workspaces(state: State<'_, Arc<AppState>>) -> Result<Vec<WorkspaceItem>, String> {
@@ -72,7 +148,7 @@ pub async fn add_workspace(
         .unwrap_or_else(|| "Workspace".to_string());
 
     let final_name = name.unwrap_or(default_name);
-    let id = format!("ws_{}", chrono::Utc::now().timestamp_millis());
+    let id = format!("ws_{}", chrono::Local::now().timestamp_millis());
 
     let mut item = WorkspaceItem {
         id: id.clone(),
@@ -211,15 +287,69 @@ pub async fn start_workspace_session(
     if let Some(out) = stdout {
         let app_handle = app.clone();
         let ws_id = workspace_id.clone();
+        let workspace_name = ws_name.clone();
         let state_clone = state.inner().clone();
         std::thread::spawn(move || {
             use std::io::{BufRead, BufReader};
             let reader = BufReader::new(out);
+            let mut pending_tools: HashMap<String, PendingToolCall> = HashMap::new();
             for line_res in reader.lines() {
                 if let Ok(line) = line_res {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
+                    }
+
+                    if let Some(event) = parse_rpc_audit_event(trimmed) {
+                        match event {
+                            RpcAuditEvent::ToolStarted {
+                                call_id,
+                                tool_name,
+                                args_json,
+                                input_tokens,
+                            } => {
+                                let record_id = insert_running_call(
+                                    &state_clone,
+                                    &ws_id,
+                                    &workspace_name,
+                                    &call_id,
+                                    tool_name,
+                                    args_json,
+                                    input_tokens,
+                                );
+                                pending_tools.insert(
+                                    call_id,
+                                    PendingToolCall {
+                                        record_id,
+                                        started_at: Instant::now(),
+                                    },
+                                );
+                                let _ = app_handle.emit(
+                                    "audit-updated",
+                                    serde_json::json!({ "workspace_id": &ws_id }),
+                                );
+                            }
+                            RpcAuditEvent::ToolFinished {
+                                call_id,
+                                result_summary,
+                                is_error,
+                                output_tokens,
+                            } => {
+                                if let Some(pending) = pending_tools.remove(&call_id) {
+                                    finish_running_call(
+                                        &state_clone,
+                                        pending,
+                                        result_summary,
+                                        is_error,
+                                        output_tokens,
+                                    );
+                                    let _ = app_handle.emit(
+                                        "audit-updated",
+                                        serde_json::json!({ "workspace_id": &ws_id }),
+                                    );
+                                }
+                            }
+                        }
                     }
 
                     // Look for JSON RPC response containing sessionId
@@ -323,7 +453,7 @@ pub async fn start_workspace_session(
         if let Some(w) = list.iter_mut().find(|w| w.id == workspace_id) {
             w.status = "ready".to_string();
             w.pid = Some(pid);
-            w.last_started_at = Some(chrono::Utc::now().to_rfc3339());
+            w.last_started_at = Some(local_now_rfc3339());
         }
     }
 

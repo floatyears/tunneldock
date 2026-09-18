@@ -70,12 +70,20 @@ pub struct McpCallRecord {
     pub id: String,
     pub timestamp: String,
     pub session_id: Option<String>,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub workspace_name: Option<String>,
     pub tool_name: String, // "read", "bash", "edit", "write", "transfer", "sessions", "init", "chat"
     pub args_json: String,
     pub result_summary: String,
     pub status: String, // "success", "executing", "error"
     pub duration_ms: u64,
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
+    #[serde(default)]
+    pub total_tokens: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,4 +101,32 @@ pub struct CommandOutput {
     pub stdout: String,
     pub stderr: String,
     pub code: Option<i32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::McpCallRecord;
+
+    #[test]
+    fn old_history_records_default_workspace_identity_and_tokens() {
+        let legacy = r#"{
+            "id":"legacy-1",
+            "timestamp":"2026-09-16 03:14:11",
+            "session_id":null,
+            "workspace_name":"旧工作区",
+            "tool_name":"read",
+            "args_json":"{}",
+            "result_summary":"ok",
+            "status":"success",
+            "duration_ms":12
+        }"#;
+
+        let record: McpCallRecord =
+            serde_json::from_str(legacy).expect("legacy history should still load");
+
+        assert_eq!(record.workspace_id, None);
+        assert_eq!(record.input_tokens, 0);
+        assert_eq!(record.output_tokens, 0);
+        assert_eq!(record.total_tokens, 0);
+    }
 }

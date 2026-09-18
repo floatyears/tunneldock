@@ -10,27 +10,46 @@ import {
   Check,
   RefreshCw,
   Eye,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
-import { McpCallRecord } from "../types";
+import { McpCallRecord, WorkspaceItem } from "../types";
 import { clearHistory, exportHistoryJson } from "../api";
+import { formatLocalTimestamp } from "../utils/time";
+import {
+  buildHistoryStats,
+  formatTokenCount,
+  paginateHistory,
+} from "./historyStats";
+
+const PAGE_SIZE = 20;
 
 interface HistoryViewProps {
   history: McpCallRecord[];
+  workspaces: WorkspaceItem[];
   onRefresh: () => void;
 }
 
 export const HistoryView: React.FC<HistoryViewProps> = ({
   history,
+  workspaces,
   onRefresh,
 }) => {
   const [searchTerm, setSearchTerm] = useState("");
+  const [selectedWorkspace, setSelectedWorkspace] = useState("all");
   const [selectedTool, setSelectedTool] = useState<string>("all");
   const [selectedStatus, setSelectedStatus] = useState<string>("all");
+  const [currentPage, setCurrentPage] = useState(1);
   const [inspectRecord, setInspectRecord] = useState<McpCallRecord | null>(null);
   const [copiedInspect, setCopiedInspect] = useState(false);
 
+  const { records: workspaceHistory, stats } = useMemo(
+    () => buildHistoryStats(history, selectedWorkspace),
+    [history, selectedWorkspace]
+  );
+
   const filteredHistory = useMemo(() => {
-    return history.filter((item) => {
+    return workspaceHistory.filter((item) => {
       const matchSearch =
         searchTerm === "" ||
         item.tool_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -47,33 +66,12 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
 
       return matchSearch && matchTool && matchStatus;
     });
-  }, [history, searchTerm, selectedTool, selectedStatus]);
+  }, [workspaceHistory, searchTerm, selectedTool, selectedStatus]);
 
-  // Metric stats
-  const stats = useMemo(() => {
-    const total = history.length;
-    const readCount = history.filter((i) => i.tool_name === "read").length;
-    const bashCount = history.filter((i) => i.tool_name === "bash").length;
-    const writeCount = history.filter(
-      (i) => i.tool_name === "write" || i.tool_name === "edit"
-    ).length;
-    const successCount = history.filter((i) => i.status === "success").length;
-    const avgDuration =
-      total > 0
-        ? Math.round(
-            history.reduce((acc, curr) => acc + curr.duration_ms, 0) / total
-          )
-        : 0;
-
-    return {
-      total,
-      readCount,
-      bashCount,
-      writeCount,
-      successRate: total > 0 ? Math.round((successCount / total) * 100) : 100,
-      avgDuration,
-    };
-  }, [history]);
+  const pagination = useMemo(
+    () => paginateHistory(filteredHistory, currentPage, PAGE_SIZE),
+    [filteredHistory, currentPage]
+  );
 
   const handleClear = async () => {
     if (confirm("确定要清空所有 MCP 调用历史记录吗？")) {
@@ -144,11 +142,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               MCP 工具调用审计与追踪
             </h2>
             <span className="text-xs font-mono text-zinc-500">
-              ({history.length} 条记录)
+              ({workspaceHistory.length} 条记录)
             </span>
           </div>
           <p className="text-xs text-zinc-400 max-w-xl">
-            完整捕获云端 ChatGPT 通过 Tunnel 下发给本地的一切工具调用（read/bash/edit/write/transfer/sessions 等），确保本地开发操作透明与安全追溯。
+            记录各工作区 Pi RPC 实际执行的本地工具调用；Token 为调用参数与完整结果按 o200k_base 计算的 MCP 传输量。
           </p>
         </div>
 
@@ -178,7 +176,7 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-9 gap-3">
         <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
           <div className="text-[11px] font-mono text-zinc-500">总调用次数</div>
           <div className="text-lg font-bold font-mono text-zinc-100">
@@ -206,13 +204,31 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
         <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
           <div className="text-[11px] font-mono text-zinc-500">调用成功率</div>
           <div className="text-lg font-bold font-mono text-emerald-400">
-            {stats.successRate}%
+            {stats.successRate === null ? "--" : `${stats.successRate}%`}
           </div>
         </div>
         <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
           <div className="text-[11px] font-mono text-zinc-500">平均耗时</div>
           <div className="text-lg font-bold font-mono text-zinc-300">
             {stats.avgDuration} ms
+          </div>
+        </div>
+        <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
+          <div className="text-[11px] font-mono text-zinc-500">输入 Tokens</div>
+          <div className="text-lg font-bold font-mono text-sky-400">
+            {formatTokenCount(stats.inputTokens)}
+          </div>
+        </div>
+        <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
+          <div className="text-[11px] font-mono text-zinc-500">输出 Tokens</div>
+          <div className="text-lg font-bold font-mono text-violet-400">
+            {formatTokenCount(stats.outputTokens)}
+          </div>
+        </div>
+        <div className="p-3 rounded-lg bg-dark-card border border-zinc-800 space-y-1">
+          <div className="text-[11px] font-mono text-zinc-500">总 Tokens</div>
+          <div className="text-lg font-bold font-mono text-cyan-300">
+            {formatTokenCount(stats.totalTokens)}
           </div>
         </div>
       </div>
@@ -226,19 +242,44 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
               type="text"
               placeholder="搜索参数、工具名、命令内容..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                setCurrentPage(1);
+              }}
               className="w-full bg-zinc-950 border border-zinc-800 rounded pl-8 pr-3 py-1.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-600 font-mono"
             />
           </div>
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1.5 text-xs">
+            <span className="text-zinc-500 font-mono">工作区:</span>
+            <select
+              value={selectedWorkspace}
+              onChange={(e) => {
+                setSelectedWorkspace(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-300 font-mono focus:outline-none max-w-44"
+            >
+              <option value="all">全部工作区</option>
+              {workspaces.map((workspace) => (
+                <option key={workspace.id} value={workspace.id}>
+                  {workspace.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Tool Filter */}
           <div className="flex items-center gap-1.5 text-xs">
             <span className="text-zinc-500 font-mono">工具:</span>
             <select
               value={selectedTool}
-              onChange={(e) => setSelectedTool(e.target.value)}
+              onChange={(e) => {
+                setSelectedTool(e.target.value);
+                setCurrentPage(1);
+              }}
               className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-300 font-mono focus:outline-none"
             >
               <option value="all">全部工具</option>
@@ -258,7 +299,10 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             <span className="text-zinc-500 font-mono">状态:</span>
             <select
               value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
+              onChange={(e) => {
+                setSelectedStatus(e.target.value);
+                setCurrentPage(1);
+              }}
               className="bg-zinc-950 border border-zinc-800 rounded px-2 py-1 text-xs text-zinc-300 font-mono focus:outline-none"
             >
               <option value="all">全部状态</option>
@@ -283,19 +327,20 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 <th className="py-2.5 px-3">工具</th>
                 <th className="py-2.5 px-3">工作区 / Session</th>
                 <th className="py-2.5 px-3">调用参数</th>
+                <th className="py-2.5 px-3">Tokens</th>
                 <th className="py-2.5 px-3">执行耗时</th>
                 <th className="py-2.5 px-3">状态</th>
                 <th className="py-2.5 px-4 text-right">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60 font-mono">
-              {filteredHistory.map((item) => (
+              {pagination.items.map((item) => (
                 <tr
                   key={item.id}
                   className="hover:bg-zinc-900/50 transition-colors"
                 >
                   <td className="py-2.5 px-4 text-zinc-400 whitespace-nowrap">
-                    {item.timestamp}
+                    {formatLocalTimestamp(item.timestamp)}
                   </td>
                   <td className="py-2.5 px-3">{getToolBadge(item.tool_name)}</td>
                   <td className="py-2.5 px-3 text-zinc-300 truncate max-w-[140px]">
@@ -303,6 +348,9 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                   </td>
                   <td className="py-2.5 px-3 text-zinc-400 truncate max-w-[280px]">
                     {item.args_json}
+                  </td>
+                  <td className="py-2.5 px-3 text-cyan-300 whitespace-nowrap">
+                    {formatTokenCount(item.total_tokens ?? 0)}
                   </td>
                   <td className="py-2.5 px-3 text-zinc-400 whitespace-nowrap">
                     {item.duration_ms} ms
@@ -312,6 +360,11 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                       <span className="flex items-center gap-1 text-[11px] text-emerald-400">
                         <CheckCircle2 className="w-3 h-3" />
                         <span>成功</span>
+                      </span>
+                    ) : item.status === "executing" ? (
+                      <span className="flex items-center gap-1 text-[11px] text-amber-400">
+                        <RefreshCw className="w-3 h-3 animate-spin" />
+                        <span>执行中</span>
                       </span>
                     ) : (
                       <span className="flex items-center gap-1 text-[11px] text-rose-400">
@@ -334,6 +387,36 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
             </tbody>
           </table>
         )}
+        {filteredHistory.length > 0 && (
+          <div className="flex items-center justify-between border-t border-zinc-800 bg-zinc-950/40 px-4 py-3 text-[11px] font-mono text-zinc-500">
+            <span>
+              显示 {pagination.start}-{pagination.end}，共 {pagination.total} 条
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setCurrentPage(pagination.page - 1)}
+                disabled={pagination.page === 1}
+                className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-zinc-300 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <ChevronLeft className="h-3 w-3" />
+                上一页
+              </button>
+              <span className="min-w-20 text-center text-zinc-400">
+                第 {pagination.page} / {pagination.totalPages} 页
+              </span>
+              <button
+                type="button"
+                onClick={() => setCurrentPage(pagination.page + 1)}
+                disabled={pagination.page === pagination.totalPages}
+                className="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-zinc-300 transition-colors hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                下一页
+                <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Inspect Modal */}
@@ -348,8 +431,13 @@ export const HistoryView: React.FC<HistoryViewProps> = ({
                 </h3>
                 <div className="text-[11px] font-mono text-zinc-400 flex items-center gap-3">
                   <span>ID: {inspectRecord.id}</span>
-                  <span>时间: {inspectRecord.timestamp}</span>
+                  <span>时间: {formatLocalTimestamp(inspectRecord.timestamp)}</span>
                   <span>耗时: {inspectRecord.duration_ms}ms</span>
+                </div>
+                <div className="text-[11px] font-mono text-zinc-500 flex items-center gap-3">
+                  <span>输入: {formatTokenCount(inspectRecord.input_tokens ?? 0)} tokens</span>
+                  <span>输出: {formatTokenCount(inspectRecord.output_tokens ?? 0)} tokens</span>
+                  <span>总计: {formatTokenCount(inspectRecord.total_tokens ?? 0)} tokens</span>
                 </div>
               </div>
 

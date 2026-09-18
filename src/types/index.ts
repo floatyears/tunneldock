@@ -65,12 +65,16 @@ export interface McpCallRecord {
   id: string;
   timestamp: string;
   session_id: string | null;
+  workspace_id: string | null;
   workspace_name: string | null;
   tool_name: string;
   args_json: string;
   result_summary: string;
   status: "success" | "executing" | "error";
   duration_ms: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
 }
 
 export interface TunnelSettings {
