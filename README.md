@@ -112,6 +112,7 @@ npm run tauri build
 5. **绑定 ChatGPT** — 点击「生成 ChatGPT 绑定提示词」，复制到 ChatGPT 网页版发送，即可让 ChatGPT 开始操作该本地项目。
 
 更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
+关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
 
 ## 配置文件
 

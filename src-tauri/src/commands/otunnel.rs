@@ -385,10 +385,67 @@ pub async fn restart_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Str
     start_otunnel(state).await
 }
 
+fn normalize_active_chappie_collision(
+    items: &mut [DoctorCheckItem],
+    overall: &mut String,
+    raw_output: &str,
+    existing_daemon_ready: bool,
+) {
+    if !existing_daemon_ready {
+        return;
+    }
+
+    let lower = raw_output.to_ascii_lowercase();
+    let is_chappie_endpoint_collision = lower
+        .lines()
+        .any(|line| line.contains("eaddrinuse") && line.contains("chappie"))
+        && items.iter().any(|item| {
+            item.name == "mcp_server_reachable"
+                && item.status == "FAIL"
+                && item
+                    .details
+                    .to_ascii_lowercase()
+                    .contains("connection closed before the request completed")
+        })
+        && items
+            .iter()
+            .any(|item| item.name == "shutdown" && item.status == "FAIL");
+
+    if !is_chappie_endpoint_collision {
+        return;
+    }
+
+    for item in items.iter_mut() {
+        match item.name.as_str() {
+            "mcp_server_reachable" => {
+                item.status = "PASS".to_string();
+                item.details = "现有 otunnel 守护进程的 MCP 通道已就绪；Doctor 启动重复 Chappie 实例时检测到命名端点已被占用".to_string();
+                item.suggestion = None;
+            }
+            "shutdown" => {
+                item.status = "SKIP".to_string();
+                item.details = "Doctor 的重复 Chappie 子进程因命名端点已由现有守护进程占用而退出，现有实例未受影响".to_string();
+                item.suggestion = None;
+            }
+            _ => {}
+        }
+    }
+
+    *overall = if items.iter().any(|item| item.status == "FAIL") {
+        "FAIL".to_string()
+    } else {
+        "PASS".to_string()
+    };
+}
+
 #[tauri::command]
 pub async fn run_otunnel_doctor(state: State<'_, Arc<AppState>>) -> Result<DoctorReport, String> {
     ensure_chappie_yaml_synced();
     let configured_port = state.settings.lock().health_port;
+    let existing_daemon_ready = get_otunnel_status(state.clone())
+        .await
+        .map(|status| status.running && status.healthz_ok && status.readyz_ok)
+        .unwrap_or(false);
 
     let mut args = vec!["doctor".to_string()];
     if let Some(profile_file) = get_chappie_yaml_path() {
@@ -481,6 +538,8 @@ pub async fn run_otunnel_doctor(state: State<'_, Arc<AppState>>) -> Result<Docto
         overall = "FAIL".to_string();
     }
 
+    normalize_active_chappie_collision(&mut items, &mut overall, &full_raw, existing_daemon_ready);
+
     Ok(DoctorReport {
         overall,
         items,
@@ -505,7 +564,19 @@ pub async fn probe_network_latency() -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_startup_failure, parse_health_base_url};
+    use super::{
+        format_startup_failure, normalize_active_chappie_collision, parse_health_base_url,
+    };
+    use crate::models::DoctorCheckItem;
+
+    fn doctor_item(name: &str, status: &str, details: &str) -> DoctorCheckItem {
+        DoctorCheckItem {
+            name: name.to_string(),
+            status: status.to_string(),
+            details: details.to_string(),
+            suggestion: Some("original suggestion".to_string()),
+        }
+    }
 
     #[test]
     fn parses_ephemeral_health_url() {
@@ -543,5 +614,96 @@ mod tests {
 
         assert!(error.contains("otunnel 启动失败"));
         assert!(error.contains("配置、凭据和本地 MCP 命令"));
+    }
+
+    #[test]
+    fn treats_duplicate_chappie_child_as_healthy_when_daemon_is_ready() {
+        let mut items = vec![
+            doctor_item(
+                "mcp_server_reachable",
+                "FAIL",
+                "MCP connection closed before the request completed",
+            ),
+            doctor_item(
+                "control_plane_connection",
+                "PASS",
+                "tunnel metadata received",
+            ),
+            doctor_item("shutdown", "FAIL", "child exited: exit code: 1"),
+        ];
+        let mut overall = "FAIL".to_string();
+        let raw = r"listen EADDRINUSE: address already in use \\.\pipe\chappie-abc";
+
+        normalize_active_chappie_collision(&mut items, &mut overall, raw, true);
+
+        assert_eq!(overall, "PASS");
+        assert_eq!(items[0].status, "PASS");
+        assert_eq!(items[0].suggestion, None);
+        assert_eq!(items[2].status, "SKIP");
+        assert_eq!(items[2].suggestion, None);
+    }
+
+    #[test]
+    fn keeps_chappie_collision_failure_when_daemon_is_not_ready() {
+        let mut items = vec![
+            doctor_item(
+                "mcp_server_reachable",
+                "FAIL",
+                "MCP connection closed before the request completed",
+            ),
+            doctor_item("shutdown", "FAIL", "child exited: exit code: 1"),
+        ];
+        let mut overall = "FAIL".to_string();
+        let raw = r"listen EADDRINUSE: address already in use \\.\pipe\chappie-abc";
+
+        normalize_active_chappie_collision(&mut items, &mut overall, raw, false);
+
+        assert_eq!(overall, "FAIL");
+        assert_eq!(items[0].status, "FAIL");
+        assert_eq!(items[1].status, "FAIL");
+    }
+
+    #[test]
+    fn preserves_other_doctor_failures_during_active_chappie_collision() {
+        let mut items = vec![
+            doctor_item(
+                "mcp_server_reachable",
+                "FAIL",
+                "MCP connection closed before the request completed",
+            ),
+            doctor_item("control_plane_connection", "FAIL", "request timed out"),
+            doctor_item("shutdown", "FAIL", "child exited: exit code: 1"),
+        ];
+        let mut overall = "FAIL".to_string();
+        let raw = r"listen EADDRINUSE: address already in use \\.\pipe\chappie-abc";
+
+        normalize_active_chappie_collision(&mut items, &mut overall, raw, true);
+
+        assert_eq!(overall, "FAIL");
+        assert_eq!(items[0].status, "PASS");
+        assert_eq!(items[1].status, "FAIL");
+        assert_eq!(items[2].status, "SKIP");
+    }
+
+    #[test]
+    fn does_not_mistake_an_unrelated_bind_failure_for_chappie_collision() {
+        let mut items = vec![
+            doctor_item("mcp_target", "PASS", "pi --chappie"),
+            doctor_item(
+                "mcp_server_reachable",
+                "FAIL",
+                "MCP connection closed before the request completed",
+            ),
+            doctor_item("shutdown", "FAIL", "child exited: exit code: 1"),
+            doctor_item("health_listener", "FAIL", "listen EADDRINUSE"),
+        ];
+        let mut overall = "FAIL".to_string();
+        let raw = "CHECK mcp_target PASS pi --chappie\nlisten EADDRINUSE: 127.0.0.1:8080";
+
+        normalize_active_chappie_collision(&mut items, &mut overall, raw, true);
+
+        assert_eq!(overall, "FAIL");
+        assert_eq!(items[1].status, "FAIL");
+        assert_eq!(items[2].status, "FAIL");
     }
 }

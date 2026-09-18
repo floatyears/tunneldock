@@ -172,6 +172,7 @@ impl AppState {
             key_file_path: key_file.to_string_lossy().to_string(),
             health_port: 0,
             profile_name: "chappie".to_string(),
+            locale: "zh-CN".to_string(),
         }
     }
 
