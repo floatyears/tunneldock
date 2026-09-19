@@ -150,7 +150,45 @@ pub fn refresh_process_path() -> bool {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+pub fn refresh_process_path() -> bool {
+    // A GUI app launched from Finder does not inherit the PATH from the user's
+    // interactive terminal. Re-read the login-shell PATH so Homebrew and other
+    // user-installed tools are visible to environment checks and subprocesses.
+    let out = execute_raw("/bin/zsh", &["-lc", "print -r -- \"$PATH\""], None);
+    if !out.success {
+        return false;
+    }
+
+    let fresh = out.stdout.trim();
+    if fresh.is_empty() {
+        return false;
+    }
+
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut merged: Vec<PathBuf> = Vec::new();
+
+    for entry in std::env::split_paths(OsStr::new(fresh)).chain(std::env::split_paths(&current)) {
+        if entry.as_os_str().is_empty() {
+            continue;
+        }
+        let key = entry.to_string_lossy().to_string();
+        if seen.insert(key) {
+            merged.push(entry);
+        }
+    }
+
+    match std::env::join_paths(merged) {
+        Ok(path) => {
+            std::env::set_var("PATH", path);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn refresh_process_path() -> bool {
     true
 }
