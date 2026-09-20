@@ -11,7 +11,8 @@ import {
   Terminal as TerminalIcon,
   Trash2,
 } from "lucide-react";
-import { EnvCheckItem, TunnelSettings } from "../types";
+import { EnvCheckItem, McpMode, TunnelSettings } from "../types";
+import { getEnvironmentItemsForMode } from "../utils/environment";
 import {
   installComponent,
   uninstallComponent,
@@ -22,6 +23,7 @@ import { useTranslation } from "../i18n";
 
 interface EnvironmentViewProps {
   items: EnvCheckItem[];
+  mcpMode: McpMode;
   loading: boolean;
   onRefresh: () => void | Promise<void>;
   onOpenTerminal: () => void;
@@ -32,6 +34,7 @@ interface EnvironmentViewProps {
 
 export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   items,
+  mcpMode,
   loading,
   onRefresh,
   onOpenTerminal,
@@ -40,6 +43,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   onSaveSettings,
 }) => {
   const { t } = useTranslation();
+  const visibleItems = getEnvironmentItemsForMode(items, mcpMode);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [uninstallingId, setUninstallingId] = useState<string | null>(null);
   const [pendingUninstall, setPendingUninstall] = useState<EnvCheckItem | null>(
@@ -89,12 +93,14 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
     }
   };
 
-  const readyCount = items.filter((i) => i.status === "ready").length;
-  const missingItems = items.filter(
+  const readyCount = visibleItems.filter((i) => i.status === "ready").length;
+  const missingItems = visibleItems.filter(
     (i) => i.status === "missing" || i.status === "outdated"
   );
-  const configNeededItems = items.filter((i) => i.status === "config_needed");
-  const isAllReady = readyCount === items.length && items.length > 0;
+  const configNeededItems = visibleItems.filter(
+    (i) => i.status === "config_needed"
+  );
+  const isAllReady = readyCount === visibleItems.length && visibleItems.length > 0;
   const operationBusy =
     isAutoInstalling || installingId !== null || uninstallingId !== null || modeSwitchBusy;
 
@@ -225,7 +231,12 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   const categories = [
     { key: "runtime", title: t("env_view.cat_runtime") },
     { key: "tools", title: t("env_view.cat_tools") },
-    { key: "mcp", title: t("env_view.cat_mcp") },
+    {
+      key: "mcp",
+      title: t(
+        mcpMode === "readonly" ? "env_view.cat_mcp_readonly" : "env_view.cat_mcp"
+      ),
+    },
     { key: "credentials", title: t("env_view.cat_credentials") },
   ];
 
@@ -240,21 +251,32 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
         <div className="space-y-1 min-w-0">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold text-zinc-100">
-              {t("env_view.title")}
+              {t(
+                mcpMode === "readonly"
+                  ? "env_view.title_readonly"
+                  : "env_view.title"
+              )}
             </h2>
             <span className="text-xs font-mono text-zinc-500">
               {t("env_view.ready_summary", {
                 ready: readyCount,
-                total: items.length,
+                total: visibleItems.length,
               })}
             </span>
           </div>
           <p className="text-xs text-zinc-400 max-w-xl">
             {isAllReady
-              ? t("env_view.all_ready_desc")
-              : t("env_view.issues_desc", {
-                  count: missingItems.length + configNeededItems.length,
-                })}
+              ? t(
+                  mcpMode === "readonly"
+                    ? "env_view.all_ready_desc_readonly"
+                    : "env_view.all_ready_desc"
+                )
+              : t(
+                  mcpMode === "readonly"
+                    ? "env_view.issues_desc_readonly"
+                    : "env_view.issues_desc",
+                  { count: missingItems.length + configNeededItems.length }
+                )}
           </p>
         </div>
 
@@ -326,7 +348,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
       {/* Categories Grouping */}
       <div className="space-y-6">
         {categories.map((cat) => {
-          const catItems = items.filter((i) => i.category === cat.key);
+          const catItems = visibleItems.filter((i) => i.category === cat.key);
           if (catItems.length === 0) return null;
 
           return (

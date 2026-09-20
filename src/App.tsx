@@ -11,6 +11,7 @@ import {
 import { Sidebar, NavTab } from "./components/Sidebar";
 import { TerminalDrawer } from "./components/TerminalDrawer";
 import { EnvironmentView } from "./views/EnvironmentView";
+import { getEnvironmentItemsForMode } from "./utils/environment";
 import { WorkspaceView } from "./views/WorkspaceView";
 import { HealthView } from "./views/HealthView";
 import { HistoryView } from "./views/HistoryView";
@@ -363,11 +364,12 @@ export const App: React.FC = () => {
   };
 
   // Badge calculations
-  const missingEnvCount = envItems.filter(
+  const mcpMode = settings?.mcp_mode ?? "readonly";
+  const visibleEnvItems = getEnvironmentItemsForMode(envItems, mcpMode);
+  const missingEnvCount = visibleEnvItems.filter(
     (i) => i.status === "missing" || i.status === "outdated"
   ).length;
 
-  const mcpMode = settings?.mcp_mode ?? "readonly";
   const activeWorkspacesCount =
     mcpMode === "readonly"
       ? workspaces.filter((workspace) => workspace.mcp_access_enabled).length
@@ -455,6 +457,7 @@ export const App: React.FC = () => {
             {currentTab === "env" && (
               <EnvironmentView
                 items={envItems}
+                mcpMode={mcpMode}
                 loading={envLoading}
                 onRefresh={loadEnv}
                 onOpenTerminal={() => {
