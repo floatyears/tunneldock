@@ -11,7 +11,7 @@
   <a href="https://github.com/t59688/tunneldock/actions/workflows/release.yml"><img alt="Release build" src="https://img.shields.io/github/actions/workflow/status/t59688/tunneldock/release.yml" /></a>
 </p>
 
-**TunnelDock** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel + Chappie + Pi** 三件套，让 **ChatGPT 网页版**直接读取、修改、构建和测试你电脑上的项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
+**TunnelDock** 是一个基于 [Tauri 2](https://tauri.app/)（Rust）+ [React 19](https://react.dev/) + TypeScript 的桌面控制台，用于管理 **OpenAI Secure MCP Tunnel、Pi 工作区**和可选的 Chappie 执行桥。用户可以选择只读 MCP 工具，或使用 Full MCP 读写与执行本机项目——无需公网 IP、无需域名、无需路由器端口转发，也不暴露任何本地 HTTP 服务。
 
 > 核心理念：**ChatGPT 负责思考与上下文，Pi 负责本地执行**。
 >
@@ -44,7 +44,8 @@
 | **工作区与 Session** | 添加本地项目工作区（自动探测 Git 分支与未提交变更），管理 Pi Session 生命周期（启动 / 停止 / 重启），一键生成 ChatGPT 项目绑定提示词 |
 | **健康度与 Doctor 诊断** | 实时展示 otunnel 守护进程状态、健康探针与网络延迟；一键 Doctor 深度体检（配置、Tunnel ID、凭据、MCP 可达性、控制面连接等 8 项），失败项附中文修复建议 |
 | **MCP 调用审计** | 全量记录 ChatGPT 发起的工具调用（工具名 / 参数 / 结果摘要 / 耗时 / 状态），全文搜索、按类型与状态筛选、统计卡片（调用数 / 成功率 / 平均耗时）、单条详情查看与 JSON 导出 |
-| **凭据与设置** | 编辑 Tunnel ID、OpenAI Restricted API Key、健康探针端口，保存后自动同步至 `~/.chappie/` |
+| **Patch Inbox** | 粘贴标准 unified diff 或 Codex patch；按工作区预览文件增删行、校验基准 SHA-256 并运行 git apply --check，只有用户点击「应用」才修改文件 |
+| **凭据与设置** | 编辑 Tunnel ID、OpenAI Restricted API Key、健康探针端口，并选择 Read Only 只读或 Full MCP 暴露模式 |
 | **更新中心** | 基于 Tauri Updater 的签名更新：启动后静默后台检查、手动检查、下载进度实时显示、一键安装并重启 |
 | **全局框架** | 自绘跨平台标题栏、顶栏（Tunnel 状态 / Session 数量 / 一键启停）、侧边栏实时状态徽章、常驻终端抽屉（流式日志、错误高亮） |
 
@@ -60,19 +61,20 @@ OpenAI Secure MCP Tunnel
       ▼
     otunnel              ← TunnelDock 管理其生命周期、健康与诊断
       │
-      │ stdio
-      ▼
- pi --chappie            ← stdio MCP Server（Chappie broker）
+      ├── Read Only / Read-only
+      │     TunnelDock --mode readonly
+      │     search / fetch / read_file / search_code / list_files
+      │     project_tree / git_status / git_diff / git_log
       │
-      ▼
-项目中的 Pi Session
-      ├── read / write / edit
-      ├── bash
-      ├── git
-      └── build / test
+      └── Full MCP
+            pi --chappie       ← 上游 Chappie stdio MCP broker
+                  │
+                  ▼
+            项目中的 Pi Session
+            read / write / edit / bash / git / build / test
 ```
 
-关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给本地 `pi --chappie`。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
+关键在于：本地 `otunnel` **主动**通过 HTTPS 出站连接 OpenAI 拉取 MCP 请求，再转发给所选的本地 MCP 命令。只读模式不启动 Pi/Chappie broker；Full MCP 使用 `pi --chappie`。网络方向始终是出站 443，一般不受防火墙、NAT 与路由器设置影响。
 
 ## 安装
 
@@ -106,12 +108,13 @@ npm run tauri build
 ## 快速开始
 
 1. **检查环境** — 启动应用进入「环境检测与安装」页面，确认依赖状态；缺失项可点击「自动安装全部缺失组件」。
-2. **配置凭据** — 输入 **Tunnel ID** 与 **OpenAI Restricted API Key**（建议权限：`Tunnels: Read/Use`），应用将自动生成 `~/.chappie/tunnelkey.txt` 与 otunnel profile `chappie.yaml`。可在 [OpenAI 平台](https://platform.openai.com/) 创建 Tunnel 与 API Key（应用内提供直达链接）。
+2. **配置凭据** — 创建并分别填写 **Read Only Tunnel ID** 和 **Full MCP Tunnel ID**，两者必须不同；再填写一个 **OpenAI Restricted API Key**（建议权限：`Tunnels: Read/Use`）。应用会自动生成 `~/.chappie/tunnelkey.txt` 与 otunnel profile `chappie.yaml`。可在 [OpenAI 平台](https://platform.openai.com/)创建两个 Tunnel，并创建一个受限 API Key（应用内提供直达链接）。
 3. **启动 Tunnel** — 点击顶栏「启动 Tunnel」，确认守护进程运行且健康探针通过。
-4. **添加工作区并启动 Session** — 在「工作区与 Session」添加项目路径，点击「启动 Session」（等效于在该目录运行 `pi --provider chappie --model chatgpt`）。
-5. **绑定 ChatGPT** — 点击「生成 ChatGPT 绑定提示词」，复制到 ChatGPT 网页版发送，即可让 ChatGPT 开始操作该本地项目。
+4. **添加工作区** — 在「工作区」添加项目路径。Read Only 只需启用工作区访问；Full MCP 下再按需点击「启动 Pi Session」（等效于在该目录运行 `pi --provider chappie --model chatgpt`）。
+5. **绑定 ChatGPT** — 在 ChatGPT 中分别配置 Read Only 与 Full MCP 两个 MCP App，并将它们连接到各自的 Tunnel ID。TunnelDock 切换模式后，在 ChatGPT 中选择对应 App。若已发布的 App 工具定义过期，管理员需在 Workspace settings 中刷新操作定义，或按当前方案要求重新创建并发布。Read Only 只开放已登记工作区的读取和 Git 检视工具；Full MCP 使用 Pi/Chappie 执行桥。
+6. **审阅代码修改** — 将 ChatGPT 输出的 unified diff 或 Codex patch 粘贴到「Patch Inbox」，先检查文件列表与 Diff，再点击「应用」。修改/删除文件需附上读取时的 SHA-256，例如在 Codex patch 文件块内写 `*** Base SHA256: <sha>`，或在标准 diff 前写 `# base_sha256: src/foo.ts <sha>`；新增文件需确认目标路径尚不存在。
 
-更完整的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
+Full MCP 的实践与故障排查，参见 [docs/OpenAI Tunnel + Chappie + Pi.md](docs/OpenAI%20Tunnel%20%2B%20Chappie%20%2B%20Pi.md)。
 关于系统设计、通信协议与底层核心原理解析，参见 [docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md](docs/TUNNELDOCK_ARCHITECTURE_AND_PRINCIPLES.md)。
 
 ## 配置文件
@@ -119,7 +122,7 @@ npm run tauri build
 | 路径 | 用途 |
 | --- | --- |
 | `~/.chappie/tunnelkey.txt` | OpenAI Restricted API Key（控制面凭据） |
-| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（`pi --chappie`） |
+| `~/.chappie/chappie.yaml` | otunnel profile：控制面、健康探针（默认由系统自动分配空闲端口）、MCP 目标（由 MCP Mode 选择） |
 | 系统数据目录下的 `TunnelDock/` | 工作区列表、应用设置、MCP 调用历史（Rust 端持久化，重启后保留） |
 
 从旧版 `local-mcp-console/` 或更早的 `chappie-desktop/` 升级时，TunnelDock 会在首次启动时自动迁移上述应用数据；`~/.chappie/` 属于 Chappie/otunnel 兼容配置，不会随产品品牌改名。
@@ -144,10 +147,10 @@ hola/
 │   ├── api/                    # Tauri invoke 命令封装
 │   ├── components/             # TitleBar / Header / Sidebar / TerminalDrawer / UpdateDialog
 │   ├── hooks/                  # useAppUpdater 等
-│   ├── views/                  # 环境 / 工作区 / 健康度 / 审计 / 设置 五大页面
+│   ├── views/                  # 环境 / 工作区 / Patch Inbox / 健康度 / 审计 / 设置
 │   └── types/                  # 共享类型
 ├── src-tauri/                  # Rust 后端
-│   ├── src/commands/           # env / workspace / otunnel / history / settings
+│   ├── src/commands/           # env / workspace / patch / otunnel / history / settings
 │   ├── src/utils/              # 进程管理、路径工具
 │   └── tauri.conf.json         # 窗口、打包与 updater 配置
 ├── docs/                       # 功能列表、实践教程
@@ -165,6 +168,12 @@ hola/
 - 多项目场景使用 `sessionId` 精确绑定，避免操作错项目；
 - 重要仓库保持 Git 工作区干净，便于审查与回滚；
 - 项目目录**不是**系统级沙箱——最强的权限边界是：操作系统用户权限 + Git + ChatGPT 工具确认。
+
+Read Only 的 MCP 目标是 TunnelDock 自带的只读 stdio 服务，工具只接受 TunnelDock 已登记的工作区 ID 或唯一名称，并拒绝越出工作区的路径。Full MCP 仍调用单独安装的上游 Chappie 扩展；TunnelDock 不改写该扩展的工具目录或 annotations，因此 Full MCP 的工具级权限描述仍取决于 Chappie 上游版本。
+
+Read Only 与 Full MCP 使用不同的 Tunnel ID，以便 ChatGPT 中两个 MCP App 的工具快照互相隔离。切换模式时，TunnelDock 先停止 otunnel 以阻止新请求，再等待已记录的工作区调用最多 5 秒；进入 Read Only 时会停止 TunnelDock 管理的 Pi Session，并按新配置重连。若 Tunnel 原本未运行，切换后保持停止。TunnelDock 不会替用户创建、切换或刷新 ChatGPT 侧的 MCP App。已发布 App 的工具定义可能是冻结快照，需要管理员在 Workspace settings 中刷新操作定义；Business 方案更新已发布的 App 时可能需要重新创建并发布。具体流程见 [ChatGPT MCP App 指南](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)。
+
+TunnelDock 的 Full MCP 选项只控制本机是否接入 Chappie；ChatGPT 账号方案仍决定服务端是否允许写入和修改。OpenAI [当前说明](https://help.openai.com/en/articles/12584461-developer-mode-and-mcp-apps-in-chatgpt)中，Pro 用户的自定义 MCP 权限为 read/fetch，Full MCP 写入权限面向 Business、Enterprise 和 Edu。
 
 ## 贡献指南
 

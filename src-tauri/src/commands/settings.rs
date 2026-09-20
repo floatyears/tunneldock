@@ -20,11 +20,20 @@ pub fn update_settings(
     state: State<'_, Arc<AppState>>,
     new_settings: TunnelSettings,
 ) -> Result<TunnelSettings, String> {
-    let locale = new_settings.locale.clone();
-    *state.settings.lock() = new_settings.clone();
+    // Tunnel mode, IDs, credentials, and health settings must pass through
+    // save_tunnel_credentials so the running backend is stopped and reconnected
+    // with a consistent profile. This legacy command only updates the locale.
+    let locale = crate::i18n::Locale::from_str(&new_settings.locale)
+        .as_str()
+        .to_string();
+    let updated = {
+        let mut settings = state.settings.lock();
+        settings.locale = locale.clone();
+        settings.clone()
+    };
     state.save_settings();
     let _ = crate::tray::update_tray_menu(&app, &locale);
-    Ok(new_settings)
+    Ok(updated)
 }
 
 #[tauri::command]

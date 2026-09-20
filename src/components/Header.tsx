@@ -1,6 +1,6 @@
 import React from "react";
 import { Download, LoaderCircle, RefreshCw, Power, Radio, Sparkles, Globe } from "lucide-react";
-import { OtunnelDaemonStatus } from "../types";
+import { McpMode, OtunnelDaemonStatus } from "../types";
 import { AppUpdateState } from "../hooks/useAppUpdater";
 import { useTranslation } from "../i18n";
 import { APP_VERSION } from "../version";
@@ -8,6 +8,7 @@ import { APP_VERSION } from "../version";
 interface HeaderProps {
   otunnelStatus: OtunnelDaemonStatus | null;
   activeSessionsCount: number;
+  mcpMode: McpMode;
   onToggleOtunnel: () => void;
   isTogglingOtunnel: boolean;
   onRefresh: () => void;
@@ -18,6 +19,7 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   otunnelStatus,
   activeSessionsCount,
+  mcpMode,
   onToggleOtunnel,
   isTogglingOtunnel,
   onRefresh,
@@ -26,7 +28,7 @@ export const Header: React.FC<HeaderProps> = ({
 }) => {
   const { t, locale, setLocale } = useTranslation();
   const isRunning = Boolean(otunnelStatus?.running);
-  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok);
+  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok && otunnelStatus?.readyz_ok);
   const latencyMs = otunnelStatus?.latency_ms;
 
   const handleToggleLang = () => {
@@ -136,7 +138,9 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Workspace Sessions Count */}
         <div className="flex items-center gap-2 px-3 py-1 rounded bg-zinc-900/90 border border-zinc-800 text-xs font-mono">
           <Radio className="w-3.5 h-3.5 text-zinc-400" />
-          <span className="text-zinc-400">{t("header.sessions_label")}</span>
+          <span className="text-zinc-400">
+            {t(mcpMode === "readonly" ? "header.workspaces_label_readonly" : "header.sessions_label")}
+          </span>
           <span
             className={
               activeSessionsCount > 0
@@ -144,7 +148,7 @@ export const Header: React.FC<HeaderProps> = ({
                 : "text-zinc-500"
             }
           >
-            {t("header.sessions_online", { count: activeSessionsCount })}
+            {t(mcpMode === "readonly" ? "header.workspaces_accessible" : "header.sessions_online", { count: activeSessionsCount })}
           </span>
         </div>
       </div>

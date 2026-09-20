@@ -6,3 +6,4 @@ pub mod otunnel;
 pub mod workspace;
 pub mod history;
 pub mod settings;
+pub mod patch;

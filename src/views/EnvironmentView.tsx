@@ -26,6 +26,7 @@ interface EnvironmentViewProps {
   onRefresh: () => void | Promise<void>;
   onOpenTerminal: () => void;
   settings: TunnelSettings | null;
+  modeSwitchBusy: boolean;
   onSaveSettings: () => void | Promise<void>;
 }
 
@@ -35,6 +36,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   onRefresh,
   onOpenTerminal,
   settings,
+  modeSwitchBusy,
   onSaveSettings,
 }) => {
   const { t } = useTranslation();
@@ -94,7 +96,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   const configNeededItems = items.filter((i) => i.status === "config_needed");
   const isAllReady = readyCount === items.length && items.length > 0;
   const operationBusy =
-    isAutoInstalling || installingId !== null || uninstallingId !== null;
+    isAutoInstalling || installingId !== null || uninstallingId !== null || modeSwitchBusy;
 
   const handleInstallOne = async (id: string) => {
     if (operationBusy) return;
@@ -161,6 +163,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
   };
 
   const handleSaveCredentials = async () => {
+    if (modeSwitchBusy) return;
     if (!inputTunnelId.trim() || !inputApiKey.trim()) {
       setConfigError(t("env_view.config_empty_error"));
       return;
@@ -496,7 +499,7 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
             <div className="flex items-center justify-end gap-2 pt-1">
               <button
                 onClick={() => setPendingUninstall(null)}
-                disabled={uninstallingId !== null}
+                disabled={uninstallingId !== null || modeSwitchBusy}
                 className="px-3 py-1.5 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
               >
                 {t("env_view.cancel_btn")}
@@ -594,14 +597,14 @@ export const EnvironmentView: React.FC<EnvironmentViewProps> = ({
             <div className="flex items-center justify-end gap-2 pt-2">
               <button
                 onClick={() => setShowConfigModal(false)}
-                disabled={configSaving}
+                disabled={configSaving || modeSwitchBusy}
                 className="px-3 py-1.5 rounded text-xs text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-50"
               >
                 {t("env_view.cancel_btn")}
               </button>
               <button
                 onClick={() => void handleSaveCredentials()}
-                disabled={configSaving}
+                disabled={configSaving || modeSwitchBusy}
                 className="px-4 py-1.5 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50"
               >
                 {configSaving

@@ -37,7 +37,7 @@ export const TerminalDrawer: React.FC<TerminalDrawerProps> = ({
   };
 
   return (
-    <div className="fixed bottom-0 left-64 right-0 h-72 bg-dark-bg/95 backdrop-blur-md border-t border-zinc-800 flex flex-col z-30 shadow-2xl animate-in slide-in-from-bottom duration-200">
+    <div className="h-72 shrink-0 bg-dark-bg border-t border-zinc-800 flex flex-col shadow-2xl animate-in slide-in-from-bottom duration-200">
       {/* Header */}
       <div className="h-9 px-4 bg-zinc-900/90 border-b border-zinc-800 flex items-center justify-between text-xs select-none">
         <div className="flex items-center gap-2 text-zinc-300 font-mono">

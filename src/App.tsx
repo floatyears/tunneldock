@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from "react";
+import { LoaderCircle } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
 import { Header } from "./components/Header";
 import { TitleBar } from "./components/TitleBar";
@@ -14,12 +15,14 @@ import { WorkspaceView } from "./views/WorkspaceView";
 import { HealthView } from "./views/HealthView";
 import { HistoryView } from "./views/HistoryView";
 import { SettingsView } from "./views/SettingsView";
+import { PatchInboxView } from "./views/PatchInboxView";
 import {
   EnvCheckItem,
   WorkspaceItem,
   OtunnelDaemonStatus,
   McpCallRecord,
   TunnelSettings,
+  McpMode,
   InstallProgressEvent,
 } from "./types";
 import { useAppUpdater } from "./hooks/useAppUpdater";
@@ -29,6 +32,7 @@ import {
   getOtunnelStatus,
   listHistory,
   getSettings,
+  saveTunnelCredentials,
   startOtunnel,
   stopOtunnel,
   refreshProcessEnvironment,
@@ -61,6 +65,12 @@ export const App: React.FC = () => {
 
   const [history, setHistory] = useState<McpCallRecord[]>([]);
   const [settings, setSettings] = useState<TunnelSettings | null>(null);
+  const [isSwitchingMcpMode, setIsSwitchingMcpMode] = useState(false);
+  const [switchingToMode, setSwitchingToMode] = useState<McpMode | null>(null);
+  const [modeSwitchNotice, setModeSwitchNotice] = useState<{
+    mode: McpMode;
+    reconnected: boolean;
+  } | null>(null);
 
   // Terminal Drawer State
   const [terminalOpen, setTerminalOpen] = useState(false);
@@ -251,6 +261,7 @@ export const App: React.FC = () => {
 
   // Header Toggle Otunnel
   const handleToggleOtunnel = async () => {
+    if (isSwitchingMcpMode || isTogglingOtunnel) return;
     const isRunning = Boolean(otunnelStatus?.running);
     try {
       setIsTogglingOtunnel(true);
@@ -266,6 +277,63 @@ export const App: React.FC = () => {
     } finally {
       await loadOtunnelStatus();
       setIsTogglingOtunnel(false);
+    }
+  };
+
+  const handleSwitchMcpMode = async (
+    nextMode: McpMode,
+    requestedSafeId?: string,
+    requestedFullId?: string,
+    requestedApiKey?: string,
+    requestedHealthPort?: number
+  ) => {
+    if (!settings || settings.mcp_mode === nextMode || isSwitchingMcpMode) return;
+    const safeId = requestedSafeId ?? settings.safe_tunnel_id;
+    const fullId = requestedFullId ?? settings.full_tunnel_id;
+    const apiKey = (requestedApiKey ?? settings.api_key).trim();
+    const healthPort = requestedHealthPort ?? settings.health_port;
+    const targetTunnelId =
+      nextMode === "readonly" ? safeId : fullId;
+    if (!targetTunnelId.trim() || !apiKey) {
+      setCurrentTab("settings");
+      setTunnelActionError(t("settings_view.mode_switch_setup_hint"));
+      return;
+    }
+    if (safeId.trim() && safeId.trim() === fullId.trim()) {
+      setCurrentTab("settings");
+      setTunnelActionError(t("settings_view.tunnel_ids_must_differ"));
+      return;
+    }
+    if (!Number.isInteger(healthPort) || healthPort < 0 || healthPort > 65535) {
+      setCurrentTab("settings");
+      setTunnelActionError(t("settings_view.health_port_desc"));
+      return;
+    }
+
+    let wasRunning = false;
+    try {
+      setIsSwitchingMcpMode(true);
+      setSwitchingToMode(nextMode);
+      setTunnelActionError(null);
+      setModeSwitchNotice(null);
+      wasRunning = (await getOtunnelStatus()).running;
+      const updated = await saveTunnelCredentials(
+        targetTunnelId,
+        apiKey,
+        healthPort,
+        nextMode,
+        safeId,
+        fullId
+      );
+      setSettings(updated);
+      await Promise.allSettled([loadOtunnelStatus(), loadWorkspaces(), loadHistoryData()]);
+      setModeSwitchNotice({ mode: nextMode, reconnected: wasRunning });
+    } catch (error) {
+      setTunnelActionError(String(error));
+      await Promise.allSettled([loadSettingsData(), loadOtunnelStatus()]);
+    } finally {
+      setIsSwitchingMcpMode(false);
+      setSwitchingToMode(null);
     }
   };
 
@@ -299,12 +367,17 @@ export const App: React.FC = () => {
     (i) => i.status === "missing" || i.status === "outdated"
   ).length;
 
-  const activeWorkspacesCount = workspaces.filter(
-    (w) => w.status === "ready" || w.status === "executing"
-  ).length;
+  const mcpMode = settings?.mcp_mode ?? "readonly";
+  const activeWorkspacesCount =
+    mcpMode === "readonly"
+      ? workspaces.filter((workspace) => workspace.mcp_access_enabled).length
+      : workspaces.filter(
+          (workspace) =>
+            workspace.status === "ready" || workspace.status === "executing"
+        ).length;
 
   const isTunnelOnline =
-    otunnelStatus?.running && otunnelStatus?.healthz_ok;
+    otunnelStatus?.running && otunnelStatus?.healthz_ok && otunnelStatus?.readyz_ok;
 
   return (
     <div className="h-screen w-screen flex flex-col bg-dark-bg text-zinc-100 overflow-hidden font-sans">
@@ -315,8 +388,9 @@ export const App: React.FC = () => {
       <Header
         otunnelStatus={otunnelStatus}
         activeSessionsCount={activeWorkspacesCount}
+        mcpMode={mcpMode}
         onToggleOtunnel={handleToggleOtunnel}
-        isTogglingOtunnel={isTogglingOtunnel}
+        isTogglingOtunnel={isTogglingOtunnel || isSwitchingMcpMode}
         onRefresh={refreshAll}
         updateState={updater.state}
         onOpenUpdater={updater.openDialog}
@@ -342,6 +416,22 @@ export const App: React.FC = () => {
           </button>
         </div>
       )}
+      {modeSwitchNotice && (
+        <div className="mx-4 mt-3 rounded-lg border border-amber-800/60 bg-amber-950/30 px-4 py-3 text-xs text-amber-200 flex items-start justify-between gap-4">
+          <div>{t(modeSwitchNotice.reconnected ? "app.mode_switched_reconnected" : "app.mode_switched_stopped", {
+            mode: t(modeSwitchNotice.mode === "readonly" ? "settings_view.mcp_mode_readonly" : "settings_view.mcp_mode_full"),
+          })}</div>
+          <button type="button" onClick={() => setModeSwitchNotice(null)} className="shrink-0 text-amber-300 hover:text-amber-100">
+            {t("app.close_btn")}
+          </button>
+        </div>
+      )}
+      {switchingToMode && (
+        <div role="status" aria-live="polite" className="mx-4 mt-3 rounded-lg border border-sky-800/60 bg-sky-950/30 px-4 py-3 text-xs text-sky-200 flex items-center gap-2">
+          <LoaderCircle className="h-4 w-4 shrink-0 animate-spin" />
+          <span>{t(switchingToMode === "readonly" ? "app.mode_switching_safe" : "app.mode_switching_full")}</span>
+        </div>
+      )}
 
       {/* Main Workspace Frame */}
       <div className="flex-1 flex overflow-hidden">
@@ -354,68 +444,85 @@ export const App: React.FC = () => {
           doctorPassed={!!isTunnelOnline}
           historyCount={history.length}
           settings={settings}
+          mcpMode={mcpMode}
+          modeSwitchBusy={isSwitchingMcpMode}
+          onSwitchMode={handleSwitchMcpMode}
         />
 
-        {/* View Content Area */}
-        <main className="flex-1 overflow-y-auto bg-dark-bg">
-          {currentTab === "env" && (
-            <EnvironmentView
-              items={envItems}
-              loading={envLoading}
-              onRefresh={loadEnv}
-              onOpenTerminal={() => {
-                setTerminalTitle(t("app.terminal_title_env_diag"));
-                setTerminalOpen(true);
-              }}
-              settings={settings}
-              onSaveSettings={loadSettingsData}
-            />
-          )}
+        {/* View content and terminal share the right pane without overlapping. */}
+        <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+          <main className="flex-1 min-h-0 overflow-y-auto bg-dark-bg">
+            {currentTab === "env" && (
+              <EnvironmentView
+                items={envItems}
+                loading={envLoading}
+                onRefresh={loadEnv}
+                onOpenTerminal={() => {
+                  setTerminalTitle(t("app.terminal_title_env_diag"));
+                  setTerminalOpen(true);
+                }}
+                settings={settings}
+                modeSwitchBusy={isSwitchingMcpMode}
+                onSaveSettings={loadSettingsData}
+              />
+            )}
 
-          {currentTab === "workspaces" && (
-            <WorkspaceView
-              workspaces={workspaces}
-              loading={workspacesLoading}
-              onRefresh={loadWorkspaces}
-              onOpenTerminalForWorkspace={handleOpenTerminalForWs}
-            />
-          )}
+            {currentTab === "workspaces" && (
+              <WorkspaceView
+                workspaces={workspaces}
+                loading={workspacesLoading}
+                mcpMode={mcpMode}
+                modeSwitchBusy={isSwitchingMcpMode}
+                onRefresh={loadWorkspaces}
+                onOpenTerminalForWorkspace={handleOpenTerminalForWs}
+              />
+            )}
 
-          {currentTab === "health" && (
-            <HealthView
-              otunnelStatus={otunnelStatus}
-              onRefreshStatus={loadOtunnelStatus}
-            />
-          )}
+            {currentTab === "patches" && (
+              <PatchInboxView
+                workspaces={workspaces}
+                onRefreshWorkspaces={loadWorkspaces}
+              />
+            )}
 
-          {currentTab === "history" && (
-            <HistoryView
-              history={history}
-              workspaces={workspaces}
-              onRefresh={loadHistoryData}
-            />
-          )}
+            {currentTab === "health" && (
+              <HealthView
+                otunnelStatus={otunnelStatus}
+                modeSwitchBusy={isSwitchingMcpMode}
+                onRefreshStatus={loadOtunnelStatus}
+              />
+            )}
 
-          {currentTab === "settings" && (
-            <SettingsView
-              settings={settings}
-              onRefreshSettings={loadSettingsData}
-              updateState={updater.state}
-              onCheckUpdates={() => updater.checkForUpdates(true)}
-              onOpenUpdater={updater.openDialog}
-            />
-          )}
-        </main>
+            {currentTab === "history" && (
+              <HistoryView
+                history={history}
+                workspaces={workspaces}
+                onRefresh={loadHistoryData}
+              />
+            )}
+
+            {currentTab === "settings" && (
+              <SettingsView
+                settings={settings}
+                onRefreshSettings={loadSettingsData}
+                onSwitchMode={handleSwitchMcpMode}
+                modeSwitchBusy={isSwitchingMcpMode}
+                updateState={updater.state}
+                onCheckUpdates={() => updater.checkForUpdates(true)}
+                onOpenUpdater={updater.openDialog}
+              />
+            )}
+          </main>
+
+          <TerminalDrawer
+            title={terminalTitle}
+            isOpen={terminalOpen}
+            onClose={() => setTerminalOpen(false)}
+            logs={terminalLogs}
+            onClear={() => setTerminalLogs([])}
+          />
+        </div>
       </div>
-
-      {/* Persistent Monospace Terminal Drawer */}
-      <TerminalDrawer
-        title={terminalTitle}
-        isOpen={terminalOpen}
-        onClose={() => setTerminalOpen(false)}
-        logs={terminalLogs}
-        onClear={() => setTerminalLogs([])}
-      />
 
       <UpdateDialog
         open={updater.dialogOpen}

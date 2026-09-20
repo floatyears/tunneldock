@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::models::{McpCallRecord, TunnelSettings, WorkspaceItem};
+use crate::models::{McpCallRecord, McpMode, TunnelSettings, WorkspaceItem};
 use crate::utils::cmd::kill_process_tree;
 use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
 use crate::utils::time::normalize_timestamp_to_local;
@@ -25,6 +25,8 @@ pub struct AppState {
     pub history: Arc<Mutex<Vec<McpCallRecord>>>,
     pub settings: Arc<Mutex<TunnelSettings>>,
     pub app_data_dir: PathBuf,
+    pub tunnel_config_busy: AtomicBool,
+    pub workspace_start_count: AtomicUsize,
     cleanup_started: AtomicBool,
 }
 
@@ -46,6 +48,8 @@ impl AppState {
             history: Arc::new(Mutex::new(history)),
             settings: Arc::new(Mutex::new(settings)),
             app_data_dir,
+            tunnel_config_busy: AtomicBool::new(false),
+            workspace_start_count: AtomicUsize::new(0),
             cleanup_started: AtomicBool::new(false),
         }
     }
@@ -123,15 +127,39 @@ impl AppState {
         let file = data_dir.join("settings.json");
         if let Ok(content) = fs::read_to_string(&file) {
             if let Ok(mut settings) = serde_json::from_str::<TunnelSettings>(&content) {
+                let previous_safe = settings.safe_tunnel_id.clone();
+                let previous_full = settings.full_tunnel_id.clone();
+                match settings.mcp_mode {
+                    McpMode::ReadOnly => {
+                        if settings.safe_tunnel_id.is_empty() {
+                            settings.safe_tunnel_id = settings.tunnel_id.clone();
+                        } else {
+                            settings.tunnel_id = settings.safe_tunnel_id.clone();
+                        }
+                    }
+                    McpMode::Full => {
+                        if settings.full_tunnel_id.is_empty() {
+                            settings.full_tunnel_id = settings.tunnel_id.clone();
+                        } else {
+                            settings.tunnel_id = settings.full_tunnel_id.clone();
+                        }
+                    }
+                }
                 // 8080 was TunnelDock's legacy hard-coded default. Migrate it to
                 // automatic allocation so upgrades do not retain the collision-prone
                 // behavior. Users can still choose any explicit non-zero port later.
+                let mut settings_changed = settings.safe_tunnel_id != previous_safe
+                    || settings.full_tunnel_id != previous_full;
                 if settings.health_port == 8080 {
                     settings.health_port = 0;
+                    settings_changed = true;
+                }
+                if settings_changed {
                     if let Ok(json) = serde_json::to_string_pretty(&settings) {
                         let _ = fs::write(&file, json);
                     }
                 }
+                settings.profile_name = "chappie".to_string();
                 return settings;
             }
         }
@@ -151,8 +179,12 @@ impl AppState {
 
         // Try reading tunnel_id from chappie.yaml across all standard locations.
         let mut tunnel_id = String::new();
+        let mut mcp_mode = McpMode::ReadOnly;
         if let Some(yaml_file) = get_chappie_yaml_path() {
             if let Ok(yaml_content) = fs::read_to_string(yaml_file) {
+                if yaml_content.contains("pi --chappie") {
+                    mcp_mode = McpMode::Full;
+                }
                 for line in yaml_content.lines() {
                     if line.trim().starts_with("tunnel_id:") {
                         tunnel_id = line
@@ -167,11 +199,14 @@ impl AppState {
         }
 
         TunnelSettings {
-            tunnel_id,
+            tunnel_id: tunnel_id.clone(),
+            safe_tunnel_id: if mcp_mode == McpMode::ReadOnly { tunnel_id.clone() } else { String::new() },
+            full_tunnel_id: if mcp_mode == McpMode::Full { tunnel_id.clone() } else { String::new() },
             api_key: key,
             key_file_path: key_file.to_string_lossy().to_string(),
             health_port: 0,
             profile_name: "chappie".to_string(),
+            mcp_mode,
             locale: "zh-CN".to_string(),
         }
     }

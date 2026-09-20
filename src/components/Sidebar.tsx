@@ -6,12 +6,20 @@ import {
   History,
   Settings,
   ExternalLink,
+  Inbox,
+  ShieldCheck,
 } from "lucide-react";
-import { TunnelSettings } from "../types";
+import { McpMode, TunnelSettings } from "../types";
 import { APP_VERSION } from "../version";
 import { useTranslation } from "../i18n";
 
-export type NavTab = "env" | "workspaces" | "health" | "history" | "settings";
+export type NavTab =
+  | "env"
+  | "workspaces"
+  | "patches"
+  | "health"
+  | "history"
+  | "settings";
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -21,6 +29,9 @@ interface SidebarProps {
   doctorPassed: boolean;
   historyCount: number;
   settings: TunnelSettings | null;
+  mcpMode: McpMode;
+  modeSwitchBusy: boolean;
+  onSwitchMode: (mode: McpMode) => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -31,6 +42,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   doctorPassed,
   historyCount,
   settings,
+  mcpMode,
+  modeSwitchBusy,
+  onSwitchMode,
 }) => {
   const { t } = useTranslation();
 
@@ -50,13 +64,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: "workspaces" as NavTab,
-      label: t("sidebar.nav_workspaces"),
+      label: t(mcpMode === "readonly" ? "sidebar.nav_workspaces_readonly" : "sidebar.nav_workspaces"),
       icon: Layers,
-      badge: t("sidebar.ws_badge_running", { count: activeWorkspacesCount }),
+      badge: t(mcpMode === "readonly" ? "sidebar.ws_badge_accessible" : "sidebar.ws_badge_running", { count: activeWorkspacesCount }),
       badgeColor:
         activeWorkspacesCount > 0
           ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30"
           : "bg-zinc-800 text-zinc-400 border-zinc-700",
+    },
+    {
+      id: "patches" as NavTab,
+      label: t("sidebar.nav_patches"),
+      icon: Inbox,
+      badge: null,
+      badgeColor: "",
     },
     {
       id: "health" as NavTab,
@@ -89,6 +110,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside className="w-64 border-r border-zinc-800/80 bg-dark-bg/95 flex flex-col justify-between select-none">
       {/* Navigation Links */}
       <div className="p-3 space-y-1">
+        <div className="mb-3 rounded-lg border border-zinc-800 bg-zinc-950/70 p-2.5">
+          <div className="mb-2 flex items-center gap-1.5 px-1 text-[10px] font-mono uppercase tracking-wider text-zinc-500">
+            <ShieldCheck className="h-3 w-3" />
+            <span>{t("sidebar.run_mode")}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-1 rounded-md bg-zinc-900 p-1">
+            {(["readonly", "full"] as McpMode[]).map((mode) => {
+              const targetId = mode === "readonly" ? settings?.safe_tunnel_id : settings?.full_tunnel_id;
+              const otherId = mode === "readonly" ? settings?.full_tunnel_id : settings?.safe_tunnel_id;
+              const normalizedTargetId = targetId?.trim() ?? "";
+              const normalizedOtherId = otherId?.trim() ?? "";
+              const canSwitch = Boolean(
+                settings?.api_key.trim() &&
+                  normalizedTargetId &&
+                  normalizedTargetId !== normalizedOtherId
+              );
+              const active = mcpMode === mode;
+              return (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={modeSwitchBusy || active}
+                  onClick={() => {
+                    if (!canSwitch) {
+                      onSelectTab("settings");
+                      return;
+                    }
+                    onSwitchMode(mode);
+                  }}
+                  title={
+                    !canSwitch
+                      ? t("settings_view.mode_switch_setup_hint")
+                      : t(mode === "readonly" ? "sidebar.mode_safe_tooltip" : "sidebar.mode_full_tooltip")
+                  }
+                  className={active
+                    ? "rounded px-2 py-2 text-[11px] font-semibold bg-emerald-950/60 text-emerald-300 border border-emerald-700/60"
+                    : "rounded px-2 py-2 text-[11px] font-medium bg-zinc-900 text-zinc-400 border border-transparent hover:border-zinc-700 hover:text-zinc-200 disabled:opacity-40"}
+                >
+                  {t(mode === "readonly" ? "sidebar.mode_safe_label" : "sidebar.mode_full_label")}
+                </button>
+              );
+            })}
+          </div>
+        </div>
         <div className="px-3 py-2 text-[11px] font-mono uppercase tracking-wider text-zinc-500 font-semibold">
           {t("sidebar.core_nav")}
         </div>

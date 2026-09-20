@@ -6,6 +6,9 @@ import {
   WorkspaceItem,
   McpCallRecord,
   TunnelSettings,
+  McpMode,
+  PatchPreview,
+  PatchApplyResult,
 } from "../types";
 
 // Environment API
@@ -32,12 +35,18 @@ export async function uninstallComponent(itemId: string): Promise<boolean> {
 export async function saveTunnelCredentials(
   tunnelId: string,
   apiKey: string,
-  healthPort?: number
+  healthPort?: number,
+  mcpMode?: McpMode,
+  safeTunnelId?: string,
+  fullTunnelId?: string
 ): Promise<TunnelSettings> {
   return await invoke<TunnelSettings>("save_tunnel_credentials", {
     tunnelId,
     apiKey,
     healthPort,
+    ...(mcpMode ? { mcpMode } : {}),
+    ...(safeTunnelId !== undefined ? { safeTunnelId } : {}),
+    ...(fullTunnelId !== undefined ? { fullTunnelId } : {}),
   });
 }
 
@@ -82,6 +91,16 @@ export async function removeWorkspace(workspaceId: string): Promise<boolean> {
   return await invoke<boolean>("remove_workspace", { workspaceId });
 }
 
+export async function setWorkspaceAccessEnabled(
+  workspaceId: string,
+  enabled: boolean
+): Promise<WorkspaceItem> {
+  return await invoke<WorkspaceItem>("set_workspace_access_enabled", {
+    workspaceId,
+    enabled,
+  });
+}
+
 export async function startWorkspaceSession(
   workspaceId: string
 ): Promise<number> {
@@ -103,13 +122,29 @@ export async function restartWorkspaceSession(
 export async function generateChatGptPrompt(
   path: string,
   sessionId?: string | null,
-  locale?: string | null
+  locale?: string | null,
+  workspaceId?: string | null
 ): Promise<string> {
   return await invoke<string>("generate_chatgpt_prompt", {
     path,
     sessionId: sessionId || null,
     locale: locale || null,
+    workspaceId: workspaceId || null,
   });
+}
+
+export async function previewPatch(
+  workspaceId: string,
+  patchText: string
+): Promise<PatchPreview> {
+  return await invoke<PatchPreview>("preview_patch", { workspaceId, patchText });
+}
+
+export async function applyPatch(
+  workspaceId: string,
+  patchText: string
+): Promise<PatchApplyResult> {
+  return await invoke<PatchApplyResult>("apply_patch", { workspaceId, patchText });
 }
 
 // History API

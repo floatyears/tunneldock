@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use crate::models::{McpMode, TunnelSettings};
 
 /// All standard chappie.yaml locations used by otunnel / TunnelDock.
 ///
@@ -94,4 +95,42 @@ pub fn ensure_chappie_yaml_synced() {
             let _ = sync_chappie_yaml(&content);
         }
     }
+}
+
+/// Build the otunnel profile command from the selected MCP capability mode.
+/// Read-only mode reuses the TunnelDock executable as a small stdio MCP server;
+/// this avoids depending on a separate binary being on the user's PATH.
+pub fn render_tunnel_profile(settings: &TunnelSettings) -> Result<String, String> {
+    let command = match settings.mcp_mode {
+        McpMode::Full => "pi --chappie".to_string(),
+        McpMode::ReadOnly => {
+            let executable = std::env::current_exe()
+                .map_err(|e| format!("无法定位 TunnelDock 可执行文件: {}", e))?;
+            let executable = executable.to_string_lossy();
+            // Otunnel accepts a shell-style command string. Single quoting keeps
+            // paths with spaces (including Windows paths) as one executable.
+            let shell_quoted = format!("'{}'", executable.replace('\'', "'\\''"));
+            format!("{} --mode readonly", shell_quoted)
+        }
+    };
+    let key_file = settings.key_file_path.replace('\\', "/");
+    let yaml_quote = |value: &str| format!("'{}'", value.replace('\'', "''"));
+
+    Ok(format!(
+        "config_version: 1\n\
+admin_ui:\n  open_browser: false\n\
+control_plane:\n  api_key: file:{}\n  base_url: https://api.openai.com\n  tunnel_id: {}\n\
+health:\n  listen_addr: 127.0.0.1:{}\n\
+log:\n  format: json\n  level: info\n\
+mcp:\n  commands:\n  - channel: main\n    command: {}\n",
+        key_file,
+        settings.tunnel_id,
+        settings.health_port,
+        yaml_quote(&command)
+    ))
+}
+
+pub fn sync_tunnel_profile(settings: &TunnelSettings) -> Result<PathBuf, String> {
+    let profile = render_tunnel_profile(settings)?;
+    sync_chappie_yaml(&profile).map_err(|e| format!("写入 chappie.yaml 失败: {}", e))
 }

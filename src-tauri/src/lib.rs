@@ -5,6 +5,7 @@ mod tray;
 pub mod utils;
 pub mod commands;
 pub mod i18n;
+pub mod readonly_mcp;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -62,10 +63,13 @@ pub fn run() {
             commands::workspace::list_workspaces,
             commands::workspace::add_workspace,
             commands::workspace::remove_workspace,
+            commands::workspace::set_workspace_access_enabled,
             commands::workspace::start_workspace_session,
             commands::workspace::stop_workspace_session,
             commands::workspace::restart_workspace_session,
             commands::workspace::generate_chatgpt_prompt,
+            commands::patch::preview_patch,
+            commands::patch::apply_patch,
             // History
             commands::history::list_history,
             commands::history::clear_history,

@@ -14,14 +14,16 @@ import {
   Trash2,
   Sparkles,
   X,
+  Power,
 } from "lucide-react";
-import { WorkspaceItem } from "../types";
+import { McpMode, WorkspaceItem } from "../types";
 import {
   addWorkspace,
   removeWorkspace,
   startWorkspaceSession,
   stopWorkspaceSession,
   restartWorkspaceSession,
+  setWorkspaceAccessEnabled,
   generateChatGptPrompt,
   openPathInExplorer,
 } from "../api";
@@ -30,6 +32,8 @@ import { useTranslation } from "../i18n";
 interface WorkspaceViewProps {
   workspaces: WorkspaceItem[];
   loading: boolean;
+  mcpMode: McpMode;
+  modeSwitchBusy: boolean;
   onRefresh: () => void;
   onOpenTerminalForWorkspace: (workspaceId: string, title: string) => void;
 }
@@ -37,6 +41,8 @@ interface WorkspaceViewProps {
 export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   workspaces,
   loading: _loading,
+  mcpMode,
+  modeSwitchBusy,
   onRefresh,
   onOpenTerminalForWorkspace,
 }) => {
@@ -54,6 +60,8 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   // Loading state per workspace action
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const isReadOnly = mcpMode === "readonly";
 
   const formatGitStatus = (rawStatus: string | null | undefined): string | null => {
     if (!rawStatus) return null;
@@ -108,6 +116,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   };
 
   const handleStart = async (id: string, name: string) => {
+    if (modeSwitchBusy) return;
     try {
       setActionLoadingId(id);
       await startWorkspaceSession(id);
@@ -133,6 +142,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
   };
 
   const handleRestart = async (id: string, name: string) => {
+    if (modeSwitchBusy) return;
     try {
       setActionLoadingId(id);
       await restartWorkspaceSession(id);
@@ -145,8 +155,23 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
     }
   };
 
+  const handleToggleWorkspaceAccess = async (ws: WorkspaceItem) => {
+    if (modeSwitchBusy) return;
+    try {
+      setActionLoadingId(ws.id);
+      setActionError(null);
+      await setWorkspaceAccessEnabled(ws.id, !ws.mcp_access_enabled);
+      await onRefresh();
+    } catch (err) {
+      setActionError(String(err));
+    } finally {
+      setActionLoadingId(null);
+    }
+  };
+
   const handleRemove = async (id: string) => {
-    if (confirm(t("workspace_view.remove_confirm"))) {
+    if (modeSwitchBusy) return;
+    if (confirm(t(isReadOnly ? "workspace_view.remove_confirm_readonly" : "workspace_view.remove_confirm_full"))) {
       try {
         await removeWorkspace(id);
         await onRefresh();
@@ -158,7 +183,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
   const handleOpenPromptModal = async (ws: WorkspaceItem) => {
     try {
-      const p = await generateChatGptPrompt(ws.path, ws.session_id, locale);
+      const p = await generateChatGptPrompt(ws.path, ws.session_id, locale, ws.id);
       setPromptText(p);
       setPromptModalWs(ws);
     } catch (err) {
@@ -179,20 +204,21 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
         <div className="space-y-1">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold text-zinc-100">
-              {t("workspace_view.title")}
+              {t(isReadOnly ? "workspace_view.title_readonly" : "workspace_view.title_full")}
             </h2>
             <span className="text-xs font-mono text-zinc-500">
               {t("workspace_view.projects_count", { count: workspaces.length })}
             </span>
           </div>
           <p className="text-xs text-zinc-400 max-w-2xl">
-            {t("workspace_view.banner_desc")}
+            {t(isReadOnly ? "workspace_view.banner_desc_readonly" : "workspace_view.banner_desc_full")}
           </p>
         </div>
 
         <button
           onClick={() => setShowAddModal(true)}
-          className="flex items-center gap-2 px-4 py-2 rounded text-xs font-medium bg-zinc-100 hover:bg-white text-zinc-950 font-semibold shadow transition-all"
+          disabled={modeSwitchBusy}
+          className="flex items-center gap-2 px-4 py-2 rounded text-xs font-medium bg-zinc-100 hover:bg-white text-zinc-950 font-semibold shadow transition-all disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
           <span>{t("workspace_view.add_btn")}</span>
@@ -200,6 +226,11 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       </div>
 
       {/* Workspaces Grid */}
+      {actionError && (
+        <div role="alert" className="p-3 rounded bg-rose-950/40 border border-rose-800/60 text-xs text-rose-300">
+          {actionError}
+        </div>
+      )}
       {workspaces.length === 0 ? (
         <div className="p-12 text-center rounded-lg bg-dark-card/50 border border-zinc-800/80 space-y-4">
           <div className="w-12 h-12 rounded-full bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-400">
@@ -224,7 +255,9 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {workspaces.map((ws) => {
-            const isRunning = ws.status === "ready" || ws.status === "executing";
+            const isRunning = isReadOnly
+              ? ws.mcp_access_enabled
+              : ws.status === "ready" || ws.status === "executing";
             const isLoading = actionLoadingId === ws.id;
 
             return (
@@ -247,12 +280,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         {isRunning && (
                           <span className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-950/60 text-emerald-400 border border-emerald-800/60 shrink-0 whitespace-nowrap">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                            {t("workspace_view.session_online")}
+                            {t(isReadOnly ? "workspace_view.access_enabled_status" : "workspace_view.session_online")}
                           </span>
                         )}
                         {!isRunning && (
                           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-500 border border-zinc-800 shrink-0 whitespace-nowrap">
-                            {t("workspace_view.not_started")}
+                            {t(isReadOnly ? "workspace_view.access_paused_status" : "workspace_view.not_started")}
                           </span>
                         )}
                       </div>
@@ -272,6 +305,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
                     <button
                       onClick={() => handleRemove(ws.id)}
+                      disabled={modeSwitchBusy}
                       className="p-1 rounded text-zinc-500 hover:text-rose-400 hover:bg-zinc-900 transition-colors"
                       title={t("workspace_view.remove_workspace")}
                     >
@@ -296,38 +330,54 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       )}
                     </div>
 
-                    <div className="p-2 rounded bg-zinc-950/70 border border-zinc-800/80 space-y-0.5">
-                      <div className="text-zinc-500 flex items-center justify-between">
-                        <span>Session ID</span>
-                        {ws.pid && (
-                          <span className="text-[10px] text-zinc-500">
-                            PID: {ws.pid}
-                          </span>
-                        )}
+                    {isReadOnly ? (
+                      <div className="p-2 rounded bg-zinc-950/70 border border-zinc-800/80 space-y-0.5">
+                        <div className="text-zinc-500">{t("workspace_view.workspace_id_label")}</div>
+                        <div className="text-zinc-300 font-medium truncate" title={ws.id}>{ws.id}</div>
+                        <div className="text-[10px] text-zinc-500">{t("workspace_view.pro_safe_readonly")}</div>
                       </div>
-                      <div className="text-zinc-300 font-medium truncate">
-                        {ws.session_id
-                          ? ws.session_id
-                          : isRunning
-                          ? t("workspace_view.waiting_probe")
-                          : t("workspace_view.not_activated")}
+                    ) : (
+                      <div className="p-2 rounded bg-zinc-950/70 border border-zinc-800/80 space-y-0.5">
+                        <div className="text-zinc-500 flex items-center justify-between">
+                          <span>Session ID</span>
+                          {ws.pid && <span className="text-[10px] text-zinc-500">PID: {ws.pid}</span>}
+                        </div>
+                        <div className="text-zinc-300 font-medium truncate">
+                          {ws.session_id ? ws.session_id : isRunning ? t("workspace_view.waiting_probe") : t("workspace_view.not_activated")}
+                        </div>
+                        <div className="text-[10px] text-zinc-500">
+                          {t("workspace_view.bound_chatgpt", { count: ws.binding_count })}
+                        </div>
                       </div>
-                      <div className="text-[10px] text-zinc-500">
-                        {t("workspace_view.bound_chatgpt", {
-                          count: ws.binding_count,
-                        })}
-                      </div>
-                    </div>
+                    )}
                   </div>
+                  {isReadOnly && (
+                    <div className="col-span-2 rounded bg-zinc-950/50 border border-zinc-800/70 px-2.5 py-2 text-[10px] text-zinc-400">
+                      <div className="mb-1 text-zinc-500">{t("workspace_view.capabilities_label")}</div>
+                      <div>{t("workspace_view.readonly_capabilities")}</div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Action Buttons Row */}
                 <div className="pt-3 border-t border-zinc-800/80 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    {!isRunning ? (
+                    {isReadOnly && (
+                      <button
+                        onClick={() => handleToggleWorkspaceAccess(ws)}
+                        disabled={isLoading || modeSwitchBusy}
+                        className={ws.mcp_access_enabled
+                          ? "px-3 py-1.5 rounded text-xs font-medium bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-800/60 transition-colors flex items-center gap-1.5 disabled:opacity-50"
+                          : "px-3 py-1.5 rounded text-xs font-medium bg-emerald-950/40 hover:bg-emerald-900/40 text-emerald-300 border border-emerald-800/60 transition-colors flex items-center gap-1.5 disabled:opacity-50"}
+                      >
+                        <Power className="w-3 h-3" />
+                        <span>{t(ws.mcp_access_enabled ? "workspace_view.pause_chatgpt_access" : "workspace_view.enable_chatgpt_access")}</span>
+                      </button>
+                    )}
+                    {!isReadOnly && (!isRunning ? (
                       <button
                         onClick={() => handleStart(ws.id, ws.name)}
-                        disabled={isLoading}
+                        disabled={isLoading || modeSwitchBusy}
                         className="px-3 py-1.5 rounded text-xs font-medium bg-emerald-950/40 hover:bg-emerald-900/40 text-emerald-300 border border-emerald-800/60 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                       >
                         <Play className="w-3 h-3 text-emerald-400" />
@@ -337,7 +387,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                       <div className="flex items-center gap-1.5">
                         <button
                           onClick={() => handleStop(ws.id)}
-                          disabled={isLoading}
+                          disabled={isLoading || modeSwitchBusy}
                           className="px-2.5 py-1.5 rounded text-xs font-medium bg-rose-950/40 hover:bg-rose-900/40 text-rose-300 border border-rose-800/60 transition-colors flex items-center gap-1.5 disabled:opacity-50"
                         >
                           <Square className="w-3 h-3 text-rose-400" />
@@ -345,15 +395,16 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                         </button>
                         <button
                           onClick={() => handleRestart(ws.id, ws.name)}
-                          disabled={isLoading}
+                          disabled={isLoading || modeSwitchBusy}
                           className="p-1.5 rounded text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors disabled:opacity-50"
                           title={t("workspace_view.restart_tooltip")}
                         >
                           <RotateCcw className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                    )}
+                    ))}
 
+                    {!isReadOnly && (
                     <button
                       onClick={() =>
                         onOpenTerminalForWorkspace(
@@ -366,6 +417,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                     >
                       <Terminal className="w-4 h-4" />
                     </button>
+                    )}
                   </div>
 
                   <button
@@ -393,12 +445,13 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
                   {t("workspace_view.add_modal_title")}
                 </h3>
                 <p className="text-xs text-zinc-400">
-                  {t("workspace_view.add_modal_desc")}
+                  {t(isReadOnly ? "workspace_view.add_modal_desc_readonly" : "workspace_view.add_modal_desc_full")}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setShowAddModal(false)}
+                      onClick={() => setShowAddModal(false)}
+                      disabled={modeSwitchBusy}
                 className="shrink-0 p-1.5 text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
                 title={t("workspace_view.close_btn")}
                 aria-label="close"
@@ -464,12 +517,12 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               </button>
               <button
                 onClick={handleAddWorkspace}
-                disabled={isSubmitting}
+                disabled={isSubmitting || modeSwitchBusy}
                 className="px-4 py-1.5 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold disabled:opacity-50"
               >
                 {isSubmitting
                   ? t("workspace_view.adding_btn")
-                  : t("workspace_view.add_and_ready")}
+                  : t(isReadOnly ? "workspace_view.add_safe_workspace" : "workspace_view.add_and_ready")}
               </button>
             </div>
           </div>
@@ -484,7 +537,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
               <div className="space-y-0.5 min-w-0 flex-1">
                 <h3 className="text-sm font-semibold text-zinc-100 flex items-center gap-2">
                   <Sparkles className="w-4 h-4 text-amber-400 shrink-0" />
-                  <span>{t("workspace_view.prompt_modal_title")}</span>
+                  <span>{t(isReadOnly ? "workspace_view.prompt_modal_title_readonly" : "workspace_view.prompt_modal_title_full")}</span>
                 </h3>
                 <p
                   className="text-xs text-zinc-400 font-mono truncate"
@@ -513,7 +566,7 @@ export const WorkspaceView: React.FC<WorkspaceViewProps> = ({
 
             <div className="flex items-center justify-between gap-4 pt-1">
               <p className="text-[11px] text-zinc-400 min-w-0 flex-1">
-                {t("workspace_view.prompt_send_hint")}
+                {t(isReadOnly ? "workspace_view.prompt_send_hint_readonly" : "workspace_view.prompt_send_hint_full")}
               </p>
               <div className="flex items-center gap-2 shrink-0">
                 <button

@@ -1,11 +1,20 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
-use crate::models::{EnvCheckItem, InstallProgressEvent, TunnelSettings};
+use crate::models::{EnvCheckItem, InstallProgressEvent, McpMode, TunnelSettings};
 use crate::state::AppState;
-use crate::utils::cmd::{execute_cmd, find_executable, run_streaming};
-use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_chappie_yaml};
+use crate::utils::cmd::{execute_cmd, find_executable, is_process_running, kill_process_tree, run_streaming};
+use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_tunnel_profile};
+
+struct ResetAtomicBool<'a>(&'a AtomicBool);
+
+impl Drop for ResetAtomicBool<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 #[tauri::command]
 pub async fn check_environment(state: State<'_, Arc<AppState>>) -> Result<Vec<EnvCheckItem>, String> {
@@ -596,65 +605,249 @@ pub async fn save_tunnel_credentials(
     tunnel_id: String,
     api_key: String,
     health_port: Option<u16>,
+    mcp_mode: Option<McpMode>,
+    safe_tunnel_id: Option<String>,
+    full_tunnel_id: Option<String>,
 ) -> Result<TunnelSettings, String> {
     let clean_key = api_key.trim().to_string();
     let clean_id = tunnel_id.trim().to_string();
-    let port = health_port.unwrap_or(0);
 
     let locale = state.settings.lock().locale.clone();
     if clean_key.is_empty() || clean_id.is_empty() {
         return Err(crate::i18n::t(&locale, "error.tunnel_id_and_key_required").to_string());
     }
+    if state.tunnel_config_busy.swap(true, Ordering::AcqRel) {
+        return Err("A Tunnel configuration change is already in progress.".to_string());
+    }
+    let _config_guard = ResetAtomicBool(&state.tunnel_config_busy);
 
-    let home = dirs::home_dir().ok_or_else(|| {
-        if locale.starts_with("en") {
-            "Unable to get user home directory".to_string()
-        } else {
-            "无法获取用户主目录".to_string()
+    let current_settings = state.settings.lock().clone();
+    let port = health_port.unwrap_or(current_settings.health_port);
+    let selected_mode = mcp_mode.unwrap_or(current_settings.mcp_mode);
+    let mode_changed = selected_mode != current_settings.mcp_mode;
+    let mut safe_id = safe_tunnel_id.clone().unwrap_or_else(|| current_settings.safe_tunnel_id.clone());
+    let mut full_id = full_tunnel_id.clone().unwrap_or_else(|| current_settings.full_tunnel_id.clone());
+    if safe_id.is_empty() && full_id.is_empty() {
+        match current_settings.mcp_mode {
+            McpMode::ReadOnly => safe_id = current_settings.tunnel_id.clone(),
+            McpMode::Full => full_id = current_settings.tunnel_id.clone(),
         }
-    })?;
+    }
+    // Older callers (the first-run environment form) update the active identity
+    // without sending both mode-specific IDs.
+    if safe_tunnel_id.is_none() && full_tunnel_id.is_none() {
+        match selected_mode {
+            McpMode::ReadOnly => safe_id = clean_id.clone(),
+            McpMode::Full => full_id = clean_id.clone(),
+        }
+    }
+    safe_id = safe_id.trim().to_string();
+    full_id = full_id.trim().to_string();
+    if !safe_id.is_empty() && safe_id == full_id {
+        return Err("Read Only and Full MCP must use separate Tunnel IDs so ChatGPT keeps distinct tool snapshots.".to_string());
+    }
+    let selected_tunnel_id = match selected_mode {
+        McpMode::ReadOnly => safe_id.trim().to_string(),
+        McpMode::Full => full_id.trim().to_string(),
+    };
+    if selected_tunnel_id.is_empty() {
+        return Err(match selected_mode {
+            McpMode::ReadOnly => "Configure a Read Only Tunnel ID before switching to Read Only.".to_string(),
+            McpMode::Full => "Configure a Full MCP Tunnel ID before switching to Full MCP.".to_string(),
+        });
+    }
+
+    let backend_changed = mode_changed
+        || selected_tunnel_id != current_settings.tunnel_id
+        || clean_key != current_settings.api_key
+        || port != current_settings.health_port;
+    if backend_changed {
+        if !wait_for_workspace_starts(&state).await {
+            return Err("Pi Session 启动尚未结束，无法安全更改 Tunnel 配置；本次更改未应用。".to_string());
+        }
+    }
+
+    let mut tunnel_was_running = false;
+    if backend_changed {
+        let daemon = crate::commands::otunnel::get_otunnel_status(state.clone()).await?;
+        if daemon.running {
+            tunnel_was_running = true;
+            let stopped = crate::commands::otunnel::stop_otunnel_during_config_update(state.clone()).await?;
+            if !stopped {
+                return Err("The running MCP tunnel could not be stopped safely. No configuration change was applied.".to_string());
+            }
+        }
+        // Stop the tunnel before draining so it cannot accept more MCP work
+        // while we wait for calls already running in TunnelDock-managed Pi sessions.
+        wait_for_active_workspace_calls(&state).await;
+    }
+    let home = match dirs::home_dir() {
+        Some(home) => home,
+        None => {
+            if tunnel_was_running {
+                let _ = crate::commands::otunnel::start_otunnel_during_config_update(state.clone()).await;
+            }
+            return Err(if locale.starts_with("en") {
+                "Unable to get user home directory".to_string()
+            } else {
+                "无法获取用户主目录".to_string()
+            });
+        }
+    };
     let chappie_dir = home.join(".chappie");
-    fs::create_dir_all(&chappie_dir).map_err(|e| e.to_string())?;
+    if let Err(error) = fs::create_dir_all(&chappie_dir) {
+        if tunnel_was_running {
+            let _ = crate::commands::otunnel::start_otunnel_during_config_update(state.clone()).await;
+        }
+        return Err(error.to_string());
+    }
 
     let key_file = chappie_dir.join("tunnelkey.txt");
-    fs::write(&key_file, &clean_key).map_err(|e| format!("写入密钥文件失败: {}", e))?;
+    let previous_key = fs::read(&key_file).ok();
+    if let Err(error) = fs::write(&key_file, &clean_key) {
+        if let Some(previous) = previous_key.as_ref() {
+            let _ = fs::write(&key_file, previous);
+        } else {
+            let _ = fs::remove_file(&key_file);
+        }
+        if tunnel_was_running {
+            let _ = crate::commands::otunnel::start_otunnel_during_config_update(state.clone()).await;
+        }
+        return Err(format!("写入密钥文件失败: {}", error));
+    }
 
     let key_file_str = key_file.to_string_lossy().to_string();
 
-    let yaml_content = format!(
-r#"config_version: 1
-admin_ui:
-  open_browser: false
-control_plane:
-  api_key: file:{}
-  base_url: https://api.openai.com
-  tunnel_id: {}
-health:
-  listen_addr: 127.0.0.1:{}
-log:
-  format: json
-  level: info
-mcp:
-  commands:
-  - channel: main
-    command: pi --chappie
-"#,
-        key_file_str, clean_id, port
-    );
-
-    sync_chappie_yaml(&yaml_content).map_err(|e| format!("写入 chappie.yaml 失败: {}", e))?;
-
     let new_settings = TunnelSettings {
-        tunnel_id: clean_id,
+        tunnel_id: selected_tunnel_id,
+        safe_tunnel_id: safe_id,
+        full_tunnel_id: full_id,
         api_key: clean_key,
         key_file_path: key_file_str,
         health_port: port,
         profile_name: "chappie".to_string(),
+        mcp_mode: selected_mode,
         locale,
     };
 
+    if let Err(error) = sync_tunnel_profile(&new_settings) {
+        let _ = sync_tunnel_profile(&current_settings);
+        match previous_key {
+            Some(previous) => {
+                let _ = fs::write(&key_file, previous);
+            }
+            None => {
+                let _ = fs::remove_file(&key_file);
+            }
+        }
+        if tunnel_was_running {
+            let _ = crate::commands::otunnel::start_otunnel_during_config_update(state.clone()).await;
+        }
+        return Err(error);
+    }
+
+    if mode_changed && selected_mode == McpMode::ReadOnly {
+        if let Err(error) = stop_workspace_sessions(&state).await {
+            if let Some(previous) = previous_key.as_ref() {
+                let _ = fs::write(&key_file, previous);
+            } else {
+                let _ = fs::remove_file(&key_file);
+            }
+            let _ = sync_tunnel_profile(&current_settings);
+            if tunnel_was_running {
+                if let Err(restart_error) = crate::commands::otunnel::start_otunnel_during_config_update(state.clone()).await {
+                    return Err(format!("{error} The previous tunnel could not be restored: {restart_error}"));
+                }
+            }
+            return Err(error);
+        }
+    }
     *state.settings.lock() = new_settings.clone();
     state.save_settings();
 
+    if tunnel_was_running {
+        crate::commands::otunnel::start_otunnel_during_config_update(state.clone())
+            .await
+            .map_err(|error| format!("Mode saved, but the new MCP backend did not become ready. The tunnel remains stopped: {error}"))?;
+    }
+
     Ok(new_settings)
+}
+
+async fn wait_for_active_workspace_calls(state: &AppState) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let mut idle_since = None;
+    loop {
+        let calls_running = state
+            .history
+            .lock()
+            .iter()
+            .any(|record| record.status == "executing");
+        let now = tokio::time::Instant::now();
+        if calls_running {
+            idle_since = None;
+        } else if let Some(since) = idle_since {
+            if now.duration_since(since) >= std::time::Duration::from_millis(250) {
+                break;
+            }
+        } else {
+            idle_since = Some(now);
+        }
+        if now >= deadline {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn wait_for_workspace_starts(state: &AppState) -> bool {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while state.workspace_start_count.load(Ordering::Acquire) > 0 {
+        if tokio::time::Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    true
+}
+
+async fn stop_workspace_sessions(state: &AppState) -> Result<(), String> {
+    let pids = state.running_workspace_pids.lock().values().copied().collect::<Vec<_>>();
+    let mut every_process_tree_stopped = true;
+    for pid in &pids {
+        if !kill_process_tree(*pid) {
+            every_process_tree_stopped = false;
+        }
+    }
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+    while pids.iter().any(|pid| is_process_running(*pid)) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err("Could not stop every TunnelDock-managed Pi Session. Read Only was not enabled.".to_string());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    if !every_process_tree_stopped {
+        return Err("Could not confirm that every TunnelDock-managed Pi process was stopped. Read Only was not enabled.".to_string());
+    }
+    state.running_workspace_pids.lock().clear();
+    state.running_workspace_stdins.lock().clear();
+    {
+        let mut workspaces = state.workspaces.lock();
+        for workspace in workspaces.iter_mut() {
+            workspace.status = "stopped".to_string();
+            workspace.session_id = None;
+            workspace.pid = None;
+            workspace.binding_count = 0;
+        }
+    }
+    {
+        let mut history = state.history.lock();
+        for record in history.iter_mut().filter(|record| record.status == "executing") {
+            record.status = "error".to_string();
+            record.result_summary = "Cancelled while switching to Read Only.".to_string();
+        }
+    }
+    state.save_workspaces();
+    state.save_history();
+    Ok(())
 }

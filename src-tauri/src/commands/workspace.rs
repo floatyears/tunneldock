@@ -1,11 +1,12 @@
 use crate::audit::{parse_rpc_audit_event, RpcAuditEvent};
-use crate::models::{McpCallRecord, WorkspaceItem};
+use crate::models::{McpCallRecord, McpMode, WorkspaceItem};
 use crate::state::AppState;
 use crate::utils::cmd::{execute_cmd, is_process_running, kill_process_tree};
 use crate::utils::time::local_now_rfc3339;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
@@ -14,6 +15,14 @@ use tauri::{AppHandle, Emitter, State};
 use std::os::windows::process::CommandExt;
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+struct WorkspaceStartGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl Drop for WorkspaceStartGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
 
 struct PendingToolCall {
     record_id: String,
@@ -158,6 +167,7 @@ pub async fn add_workspace(
         id: id.clone(),
         name: final_name,
         path: p.to_string_lossy().to_string(),
+        mcp_access_enabled: true,
         status: "stopped".to_string(),
         session_id: None,
         pid: None,
@@ -188,6 +198,29 @@ pub async fn add_workspace(
 }
 
 #[tauri::command]
+pub fn set_workspace_access_enabled(
+    state: State<'_, Arc<AppState>>,
+    workspace_id: String,
+    enabled: bool,
+) -> Result<WorkspaceItem, String> {
+    if state.settings.lock().mcp_mode != McpMode::ReadOnly {
+        return Err("Workspace access toggles are available in Read Only mode".to_string());
+    }
+
+    let mut workspaces = state.workspaces.lock();
+    let workspace = workspaces
+        .iter_mut()
+        .find(|workspace| workspace.id == workspace_id)
+        .ok_or_else(|| "Workspace not found".to_string())?;
+    workspace.mcp_access_enabled = enabled;
+    let updated = workspace.clone();
+    drop(workspaces);
+
+    state.save_workspaces();
+    Ok(updated)
+}
+
+#[tauri::command]
 pub async fn remove_workspace(
     app: AppHandle,
     state: State<'_, Arc<AppState>>,
@@ -210,6 +243,21 @@ pub async fn start_workspace_session(
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
+    if state.tunnel_config_busy.load(Ordering::Acquire) {
+        return Err("Pi sessions cannot start while Tunnel configuration is changing.".to_string());
+    }
+    state.workspace_start_count.fetch_add(1, Ordering::AcqRel);
+    let _start_guard = WorkspaceStartGuard(&state.workspace_start_count);
+    // Pair the increment with a second check so a mode switch that started
+    // between the first check and this reservation cannot miss an in-flight
+    // session launch before it drains Pi processes for Read Only.
+    if state.tunnel_config_busy.load(Ordering::Acquire) {
+        return Err("Pi sessions cannot start while Tunnel configuration is changing.".to_string());
+    }
+    if state.settings.lock().mcp_mode == McpMode::ReadOnly {
+        return Err("Pi sessions are disabled in Read Only mode. Use workspace access instead.".to_string());
+    }
+
     let (path_str, ws_name, locale) = {
         let workspaces = state.workspaces.lock();
         let ws = workspaces
@@ -519,6 +567,12 @@ pub async fn restart_workspace_session(
     state: State<'_, Arc<AppState>>,
     workspace_id: String,
 ) -> Result<u32, String> {
+    if state.tunnel_config_busy.load(Ordering::Acquire) {
+        return Err("Pi sessions cannot restart while Tunnel configuration is changing.".to_string());
+    }
+    if state.settings.lock().mcp_mode == McpMode::ReadOnly {
+        return Err("Pi sessions are disabled in Read Only mode. Use workspace access instead.".to_string());
+    }
     let _ = stop_workspace_session(app.clone(), state.clone(), workspace_id.clone()).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     start_workspace_session(app, state, workspace_id).await
@@ -526,16 +580,57 @@ pub async fn restart_workspace_session(
 
 #[tauri::command]
 pub fn generate_chatgpt_prompt(
+    state: State<'_, Arc<AppState>>,
     path: String,
     session_id: Option<String>,
     locale: Option<String>,
+    workspace_id: Option<String>,
 ) -> String {
     let is_en = locale.as_deref().unwrap_or("").starts_with("en");
+    let settings = state.settings.lock().clone();
+    if settings.mcp_mode == crate::models::McpMode::ReadOnly {
+        let workspace = workspace_id
+            .filter(|id| !id.trim().is_empty())
+            .or_else(|| {
+                state.workspaces.lock()
+                    .iter()
+                    .find(|workspace| workspace.path == path)
+                    .map(|workspace| workspace.id.clone())
+            })
+            .unwrap_or_default();
+        let workspace_name = state
+            .workspaces
+            .lock()
+            .iter()
+            .find(|entry| entry.id == workspace)
+            .map(|entry| entry.name.clone())
+            .unwrap_or_else(|| if is_en { "Workspace".to_string() } else { "工作区".to_string() });
+        return if is_en {
+            format!(
+r#"Use the TunnelDock Safe MCP app for read-only inspection of this registered workspace:
+Workspace: {}
+Workspace ID: {}
+
+Pass this exact ID as workspaceId on every MCP call. You may use list_workspaces only if you need to discover other enabled workspaces. Read-only tools: list_workspaces, search, fetch, read_file, search_code, list_files, project_tree, git_status, git_diff, and git_log. Inspect the project and report findings. Do not attempt write, edit, shell, or Pi session tools."#,
+                workspace_name, workspace
+            )
+        } else {
+            format!(
+            r#"请使用 TunnelDock Safe MCP App，以只读方式检查这个已登记工作区：
+工作区：{}
+工作区 ID：{}
+
+每次 MCP 调用都将此 ID 作为 workspaceId 参数。仅在需要发现其他已启用工作区时调用 list_workspaces。只读工具包括：list_workspaces、search、fetch、read_file、search_code、list_files、project_tree、git_status、git_diff、git_log。检查项目并汇报发现，不要尝试调用写入、编辑、shell 或 Pi Session 工具。"#,
+                workspace_name, workspace
+            )
+        };
+    }
+
     if let Some(sid) = session_id {
         if !sid.trim().is_empty() {
             return if is_en {
                 format!(
-r#"@Chappie
+                r#"Use the TunnelDock Full MCP app (Chappie) for this project:
 
 I want to work on project:
 {}
@@ -548,7 +643,7 @@ Then output current cwd, Git branch, and status."#,
                 )
             } else {
                 format!(
-r#"@Chappie
+                r#"请使用 TunnelDock Full MCP App（Chappie）处理这个项目：
 
 我要操作项目：
 {}
@@ -565,7 +660,7 @@ init({{ sessionId: "{}" }})
 
     if is_en {
         format!(
-r#"@Chappie
+        r#"Use the TunnelDock Full MCP app (Chappie) for this project:
 
 I want to work on project:
 {}
@@ -583,7 +678,7 @@ If the project does not exist, has multiple matches, or Pi is not online, stop a
         )
     } else {
         format!(
-r#"@Chappie
+        r#"请使用 TunnelDock Full MCP App（Chappie）处理这个项目：
 
 我要操作项目：
 {}

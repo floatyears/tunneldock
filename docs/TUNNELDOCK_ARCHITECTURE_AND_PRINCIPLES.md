@@ -18,6 +18,7 @@
   - [3.4 多工作区与 Pi Session 进程池管理](#34-多工作区与-pi-session-进程池管理)
   - [3.5 MCP 工具调用审计与数据分析](#35-mcp-工具调用审计与数据分析)
   - [3.6 凭据隔离与动态配置渲染](#36-凭据隔离与动态配置渲染)
+  - [3.7 Patch Inbox 与文件基准校验](#37-patch-inbox-与文件基准校验)
 - [四、系统鲁棒性与跨平台工程实践](#四系统鲁棒性与跨平台工程实践)
   - [4.1 进程树优雅销毁与防假死机制](#41-进程树优雅销毁与防假死机制)
   - [4.2 Windows 隐匿后台运行（CREATE_NO_WINDOW）](#42-windows-隐匿后台运行create_no_window)
@@ -59,6 +60,7 @@ flowchart TD
 
         subgraph Daemons["底层运行时与进程池"]
             Otunnel["otunnel 守护进程 (主动长连接出站)"]
+            ReadonlyMcp["TunnelDock --mode readonly (只读 MCP)"]
             ChappieBroker["pi --chappie (MCP Broker / stdio)"]
             
             subgraph Sessions["工作区 Session 进程池"]
@@ -69,7 +71,8 @@ flowchart TD
     end
 
     TunnelGateway <==>|出站 HTTPS 443 反向通道| Otunnel
-    Otunnel <-->|stdio 双向管道| ChappieBroker
+    Otunnel <-->|MCP Mode: Read Only| ReadonlyMcp
+    Otunnel <-->|MCP Mode: Full MCP| ChappieBroker
     ChappieBroker <-->|Session 路由分发| SessionA
     ChappieBroker <-->|Session 路由分发| SessionB
     TunnelDock -.->|管理生命周期 / 探针 / 审计| Otunnel
@@ -165,7 +168,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
 3. **API 凭据存在性**：检查 `~/.chappie/tunnelkey.txt` 是否存在且非空；
 4. **API Key 权限特征检查**：校验是否具备 `Tunnels: Read/Use` 权限约束；
 5. **otunnel 二进制可达性**：验证系统 PATH 是否可以调用 otunnel；
-6. **MCP 代理命令探测**：检查 `pi --chappie` 是否能正常调起并响应；
+6. **MCP 代理命令探测**：按当前 MCP Mode 检查只读服务或 `pi --chappie` 是否能正常调起并响应；
 7. **控制面网络连通性**：发起对 OpenAI 隧道服务端点的 TLS 握手检测；
 8. **健康探针端口状态**：检测本地健康端口是否冲突。
 
@@ -191,7 +194,7 @@ TunnelDock 后端在启动或收到检测请求时，会在子进程中并发嗅
    ```
 2. 保持标准输入（`ChildStdin`）句柄，保存在 `AppState::running_workspace_stdins` 哈希映射表中；
 3. 将 PID 保存在 `AppState::running_workspace_pids` 中；
-4. 会话就绪后生成专属 Session ID，供 Chappie Broker 寻址。
+4. 会话就绪后生成专属 Session ID，供 Full MCP 下的 Chappie Broker 寻址。Read Only 模式使用已登记的工作区 ID，不通过 Chappie Broker 路由。
 
 #### 自动化绑定提示词生成（Prompt Generation）
 为了减少用户在网页端的繁琐配置，TunnelDock 支持一键生成与 ChatGPT 绑定的系统级指令提示词：
@@ -233,9 +236,28 @@ TunnelDock 采用最小权限与配置分层存储原则：
   health:
     listen: 127.0.0.1:<PORT>
   mcp:
-    command: pi
-    args: ["--chappie"]
+    commands:
+      - channel: main
+        # MCP Mode 选择其一
+        command: "<TunnelDock executable> --mode readonly"
+        # Full MCP 使用：command: "pi --chappie"
   ```
+- **Read Only / Read-only** 只注册 search、fetch、read_file、search_code、list_files、project_tree、git_status、git_diff 与 git_log；它不启动 Pi/Chappie 执行桥，路径限制在 TunnelDock 登记的工作区内。
+- **Full MCP** 将工具列表、通用 call 分发器与 annotations 交给已安装的 Chappie 扩展。TunnelDock 不会过滤 call 或改写上游 annotations，因此 Full MCP 的细粒度工具权限仍取决于 Chappie 版本。
+
+Read Only 与 Full MCP 分别保存 Tunnel ID，并要求两者不同。切换全局模式时，TunnelDock 会先停止当前 otunnel，阻止新请求进入；随后最多等待 5 秒让已记录的工作区调用结束。进入 Read Only 前会停止 TunnelDock 管理的 Pi Session，再以新模式的 Tunnel ID 和 MCP 命令重新连接。若 Tunnel 原本未运行，切换后保持停止。
+
+TunnelDock 无法替用户创建或选择 ChatGPT 侧的 MCP App。用户需要分别配置 Read Only 和 Full MCP App，并将它们连接到各自的 Tunnel ID。ChatGPT 可能使用已保存的工具定义快照；切换 App 后应刷新其工具定义，或按 ChatGPT 工作区设置中的提示更新 App。
+
+---
+
+### 3.7 Patch Inbox 与文件基准校验
+
+Patch Inbox 接收标准 unified diff 与 Codex `*** Begin Patch` 格式，并要求用户先选择 TunnelDock 登记的工作区。预览阶段会检查补丁路径、工作区边界、文件类型与每个已有文件的 SHA-256；新增文件则要求目标路径仍不存在。符号链接、Git 元数据、二进制补丁以及重命名/复制操作不接受。
+
+Codex 格式在每个 Update/Delete 文件块内带 `*** Base SHA256: <sha>`。标准 unified diff 在补丁块前带 `# base_sha256: path <sha>`。read_file 和 fetch 返回路径、SHA-256 与内容，ChatGPT 可以把读取时的哈希放进后续补丁。
+
+预览展示文件清单、增删行、当前/期望哈希与 Diff，并先执行 git apply --check。用户点「应用」后，TunnelDock 会重新读取哈希、再次执行 git apply --check，再调用 git apply。编辑器变更、哈希冲突或校验失败都会禁用「应用」。
 
 ---
 

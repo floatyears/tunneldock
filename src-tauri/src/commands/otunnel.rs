@@ -1,10 +1,11 @@
-use crate::models::{DoctorCheckItem, DoctorReport, OtunnelDaemonStatus};
+use crate::models::{DoctorCheckItem, DoctorReport, McpMode, OtunnelDaemonStatus};
 use crate::state::AppState;
 use crate::utils::cmd::{execute_cmd, find_process_by_name, is_process_running, kill_process_tree};
-use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path};
+use crate::utils::paths::{ensure_chappie_yaml_synced, get_chappie_yaml_path, sync_tunnel_profile};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -15,6 +16,23 @@ use std::os::windows::process::CommandExt;
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 const OTUNNEL_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const OTUNNEL_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+
+struct TunnelOperationGuard<'a>(&'a AtomicBool);
+
+impl<'a> TunnelOperationGuard<'a> {
+    fn acquire(flag: &'a AtomicBool) -> Result<Self, String> {
+        if flag.swap(true, Ordering::AcqRel) {
+            return Err("A Tunnel configuration change is already in progress.".to_string());
+        }
+        Ok(TunnelOperationGuard(flag))
+    }
+}
+
+impl Drop for TunnelOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
 
 fn parse_health_base_url(raw: &str) -> Result<(String, u16), String> {
     let trimmed = raw.trim();
@@ -206,11 +224,43 @@ pub async fn get_otunnel_status(
 
 #[tauri::command]
 pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
-    ensure_chappie_yaml_synced();
+    let _operation_guard = TunnelOperationGuard::acquire(&state.tunnel_config_busy)?;
+    start_otunnel_impl(state.clone()).await
+}
+
+pub async fn start_otunnel_during_config_update(
+    state: State<'_, Arc<AppState>>,
+) -> Result<u32, String> {
+    start_otunnel_impl(state).await
+}
+
+async fn start_otunnel_impl(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
+    let settings = state.settings.lock().clone();
+    let safe_id = settings.safe_tunnel_id.trim();
+    let full_id = settings.full_tunnel_id.trim();
+    if !safe_id.is_empty() && safe_id == full_id {
+        return Err("Read Only and Full MCP must use separate Tunnel IDs.".to_string());
+    }
+    let selected_id = match settings.mcp_mode {
+        McpMode::ReadOnly => safe_id,
+        McpMode::Full => full_id,
+    };
+    if selected_id.is_empty() || selected_id != settings.tunnel_id.trim() {
+        return Err("Configure the active mode's Tunnel ID before starting the MCP tunnel.".to_string());
+    }
+    if settings.api_key.trim().is_empty() || settings.key_file_path.trim().is_empty() {
+        return Err("Configure the Tunnel API key before starting the MCP tunnel.".to_string());
+    }
+    let configured_key = fs::read_to_string(&settings.key_file_path)
+        .map_err(|error| format!("Could not read the configured Tunnel API key file: {error}"))?;
+    if configured_key.trim().is_empty() || configured_key.trim() != settings.api_key.trim() {
+        return Err("The Tunnel API key file does not match the saved settings. Save credentials again before starting.".to_string());
+    }
+    sync_tunnel_profile(&settings)?;
 
     // Check if already running
     let cur_status = get_otunnel_status(state.clone()).await?;
-    if cur_status.running && cur_status.healthz_ok {
+    if cur_status.running && cur_status.healthz_ok && cur_status.readyz_ok {
         if let Some(p) = cur_status.pid {
             *state.otunnel_pid.lock() = Some(p);
         }
@@ -218,7 +268,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
     }
     if cur_status.running {
         return Err(format!(
-            "检测到 otunnel 进程仍在运行（PID: {}），但健康检查地址不可用。请先停止该进程后再启动，以免产生重复实例。",
+            "检测到 otunnel 进程仍在运行（PID: {}），但当前 MCP 后端尚未就绪。请先停止该进程后再启动，以免产生重复实例。",
             cur_status.pid.map(|pid| pid.to_string()).unwrap_or_else(|| "未知".to_string())
         ));
     }
@@ -326,13 +376,24 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
 
         if let Some(base_url) = resolved_health_url.as_deref() {
             let health_url = format!("{}/healthz", base_url.trim_end_matches('/'));
-            if startup_client
+            let healthz_ok = startup_client
                 .get(health_url)
                 .send()
                 .await
                 .map(|response| response.status().is_success())
-                .unwrap_or(false)
-            {
+                .unwrap_or(false);
+            let readyz_ok = if healthz_ok {
+                let ready_url = format!("{}/readyz", base_url.trim_end_matches('/'));
+                startup_client
+                    .get(ready_url)
+                    .send()
+                    .await
+                    .map(|response| response.status().is_success())
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if healthz_ok && readyz_ok {
                 *state.otunnel_health_url.lock() = Some(base_url.to_string());
                 return Ok(pid);
             }
@@ -344,7 +405,7 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
             state.clear_otunnel_runtime();
             let log = fs::read_to_string(&log_file).unwrap_or_default();
             let detail = url_file_error
-                .unwrap_or_else(|| "等待健康检查地址与 /healthz 响应超过 10 秒".to_string());
+                    .unwrap_or_else(|| "等待健康检查地址及 /healthz、/readyz 响应超过 10 秒".to_string());
             return Err(format_startup_failure(configured_port, &detail, &log));
         }
 
@@ -354,6 +415,17 @@ pub async fn start_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, Strin
 
 #[tauri::command]
 pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
+    let _operation_guard = TunnelOperationGuard::acquire(&state.tunnel_config_busy)?;
+    stop_otunnel_impl(state.clone()).await
+}
+
+pub async fn stop_otunnel_during_config_update(
+    state: State<'_, Arc<AppState>>,
+) -> Result<bool, String> {
+    stop_otunnel_impl(state).await
+}
+
+async fn stop_otunnel_impl(state: State<'_, Arc<AppState>>) -> Result<bool, String> {
     let pid_opt = *state.otunnel_pid.lock();
     let mut killed = false;
 
@@ -380,9 +452,10 @@ pub async fn stop_otunnel(state: State<'_, Arc<AppState>>) -> Result<bool, Strin
 
 #[tauri::command]
 pub async fn restart_otunnel(state: State<'_, Arc<AppState>>) -> Result<u32, String> {
-    let _ = stop_otunnel(state.clone()).await;
+    let _operation_guard = TunnelOperationGuard::acquire(&state.tunnel_config_busy)?;
+    let _ = stop_otunnel_impl(state.clone()).await;
     tokio::time::sleep(std::time::Duration::from_millis(600)).await;
-    start_otunnel(state).await
+    start_otunnel_impl(state.clone()).await
 }
 
 fn normalize_active_chappie_collision(
@@ -440,7 +513,13 @@ fn normalize_active_chappie_collision(
 
 #[tauri::command]
 pub async fn run_otunnel_doctor(state: State<'_, Arc<AppState>>) -> Result<DoctorReport, String> {
-    ensure_chappie_yaml_synced();
+    let _operation_guard = TunnelOperationGuard::acquire(&state.tunnel_config_busy)?;
+    let settings = state.settings.lock().clone();
+    if !settings.tunnel_id.is_empty() && !settings.key_file_path.is_empty() {
+        sync_tunnel_profile(&settings)?;
+    } else {
+        ensure_chappie_yaml_synced();
+    }
     let configured_port = state.settings.lock().health_port;
     let existing_daemon_ready = get_otunnel_status(state.clone())
         .await
@@ -483,9 +562,10 @@ pub async fn run_otunnel_doctor(state: State<'_, Arc<AppState>>) -> Result<Docto
                 };
 
                 let suggestion = match (name.as_str(), status.as_str()) {
-                    ("mcp_server_reachable", "FAIL") => Some(
-                        "本地 MCP 进程未能成功启动或响应。请检查系统 Node.js 是否 >= 26，并在终端执行 'pi --chappie' 确认是否存在语法或模块错误。".to_string(),
-                    ),
+                    ("mcp_server_reachable", "FAIL") => Some(match settings.mcp_mode {
+                        McpMode::ReadOnly => "TunnelDock 只读 MCP 进程未能启动或响应。请确认当前应用可执行文件可运行，并且 TunnelDock 数据目录可访问。".to_string(),
+                        McpMode::Full => "Chappie MCP 进程未能启动或响应。请检查 Pi/Chappie 安装，并在终端执行 'pi --chappie' 确认是否存在语法或模块错误。".to_string(),
+                    }),
                     ("health_listener", "FAIL") => Some(
                         if configured_port == 0 {
                             "系统自动分配健康检查端口失败。请先停止已有的 otunnel 实例，并检查本机网络权限或安全软件拦截。".to_string()

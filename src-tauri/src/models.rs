@@ -55,6 +55,8 @@ pub struct WorkspaceItem {
     pub id: String,
     pub name: String,
     pub path: String,
+    #[serde(default = "default_workspace_access")]
+    pub mcp_access_enabled: bool,
     pub status: String, // "stopped", "starting", "ready", "executing", "error"
     pub session_id: Option<String>,
     pub pid: Option<u32>,
@@ -63,6 +65,10 @@ pub struct WorkspaceItem {
     pub git_status: Option<String>,
     pub last_started_at: Option<String>,
     pub error_message: Option<String>,
+}
+
+fn default_workspace_access() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,13 +96,33 @@ fn default_locale() -> String {
     "zh-CN".to_string()
 }
 
+fn default_mcp_mode() -> McpMode {
+    // Preserve the bridge for existing settings files that predate the mode
+    // selector. New installations explicitly start in read-only mode.
+    McpMode::Full
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum McpMode {
+    #[serde(rename = "readonly")]
+    ReadOnly,
+    #[serde(rename = "full")]
+    Full,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TunnelSettings {
     pub tunnel_id: String,
+    #[serde(default)]
+    pub safe_tunnel_id: String,
+    #[serde(default)]
+    pub full_tunnel_id: String,
     pub api_key: String,
     pub key_file_path: String,
     pub health_port: u16,
     pub profile_name: String,
+    #[serde(default = "default_mcp_mode")]
+    pub mcp_mode: McpMode,
     #[serde(default = "default_locale")]
     pub locale: String,
 }

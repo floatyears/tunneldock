@@ -51,6 +51,7 @@ export interface WorkspaceItem {
   id: string;
   name: string;
   path: string;
+  mcp_access_enabled: boolean;
   status: WorkspaceStatus;
   session_id: string | null;
   pid: number | null;
@@ -78,12 +79,39 @@ export interface McpCallRecord {
 }
 
 export type Locale = "zh-CN" | "en-US";
+export type McpMode = "readonly" | "full";
 
 export interface TunnelSettings {
   tunnel_id: string;
+  safe_tunnel_id: string;
+  full_tunnel_id: string;
   api_key: string;
   key_file_path: string;
   health_port: number;
   profile_name: string;
+  mcp_mode: McpMode;
   locale: string;
+}
+
+export interface PatchFilePreview {
+  path: string;
+  change_type: "M" | "A" | "D";
+  additions: number;
+  deletions: number;
+  expected_sha256: string | null;
+  current_sha256: string | null;
+  hash_matches: boolean;
+}
+
+export interface PatchPreview {
+  files: PatchFilePreview[];
+  can_apply: boolean;
+  validation_message: string;
+  diff: string;
+}
+
+export interface PatchApplyResult {
+  applied: boolean;
+  message: string;
+  files: PatchFilePreview[];
 }

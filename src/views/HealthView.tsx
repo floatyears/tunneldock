@@ -22,11 +22,13 @@ import { useTranslation } from "../i18n";
 
 interface HealthViewProps {
   otunnelStatus: OtunnelDaemonStatus | null;
+  modeSwitchBusy: boolean;
   onRefreshStatus: () => void;
 }
 
 export const HealthView: React.FC<HealthViewProps> = ({
   otunnelStatus,
+  modeSwitchBusy,
   onRefreshStatus,
 }) => {
   const { t } = useTranslation();
@@ -39,7 +41,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
   const [actionError, setActionError] = useState<string | null>(null);
 
   const isRunning = Boolean(otunnelStatus?.running);
-  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok);
+  const isOnline = Boolean(isRunning && otunnelStatus?.healthz_ok && otunnelStatus?.readyz_ok);
   const healthAddress = otunnelStatus?.health_base_url
     ? otunnelStatus.health_base_url.replace(/^https?:\/\//, "")
     : t("health_view.health_auto_allocated");
@@ -48,6 +50,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
     : t("health_view.health_address_desc_auto");
 
   const handleToggleDaemon = async () => {
+    if (modeSwitchBusy || actionLoading) return;
     try {
       setActionLoading(true);
       setActionError(null);
@@ -66,6 +69,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
   };
 
   const handleRestartDaemon = async () => {
+    if (modeSwitchBusy || actionLoading) return;
     try {
       setActionLoading(true);
       setActionError(null);
@@ -172,7 +176,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
 
           <button
             onClick={handleRunDoctor}
-            disabled={runningDoctor}
+            disabled={runningDoctor || modeSwitchBusy}
             className="flex items-center gap-2 px-4 py-2 rounded text-xs font-medium bg-emerald-600 hover:bg-emerald-500 text-zinc-950 font-semibold shadow transition-all disabled:opacity-50"
           >
             <ShieldCheck className="w-4 h-4" />
@@ -252,7 +256,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
           <div className="pt-2 border-t border-zinc-800/80 flex items-center gap-2">
             <button
               onClick={handleToggleDaemon}
-              disabled={actionLoading}
+              disabled={actionLoading || modeSwitchBusy}
               className={`flex-1 py-1.5 rounded text-xs font-medium border flex items-center justify-center gap-1.5 transition-colors ${
                 isRunning
                   ? "bg-rose-950/30 text-rose-300 border-rose-800/60 hover:bg-rose-900/40"
@@ -269,7 +273,7 @@ export const HealthView: React.FC<HealthViewProps> = ({
             {isRunning && (
               <button
                 onClick={handleRestartDaemon}
-                disabled={actionLoading}
+                disabled={actionLoading || modeSwitchBusy}
                 className="p-1.5 rounded text-xs font-medium bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 transition-colors"
                 title={t("health_view.restart_daemon")}
               >
